@@ -2,10 +2,10 @@
 
 Full-screen terminal UI for managing a LYNX blockchain node. Built with Textual.
 
-## Quick start (placeholder)
+## Quick start
 
 ```
-wget -qO- https://example.com/lynx-tui/bootstrap.sh | bash
+wget -qO- https://github.com/getlynx/Beacon/releases/latest/download/bootstrap.sh | bash
 ```
 
 This downloads and runs the installer, which sets up dependencies, installs the app,
