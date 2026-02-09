@@ -1,7 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict, Any
 
 
 class SystemClient:
@@ -83,3 +83,119 @@ class SystemClient:
         except Exception as exc:
             errors.append(f"fallback error: {exc}")
             return False, " | ".join(errors) if errors else "Unable to set timezone."
+
+    def get_system_stats(self) -> Dict[str, Any]:
+        """Get system utilization statistics."""
+        stats = {
+            "uptime": "-",
+            "cpu_percent": 0.0,
+            "cpu_cores": 0,
+            "load_avg": [0.0, 0.0, 0.0],
+            "memory_percent": 0.0,
+            "memory_used_gb": 0.0,
+            "memory_total_gb": 0.0,
+            "swap_used_gb": 0.0,
+            "swap_total_gb": 0.0,
+            "network_down_kb": 0.0,
+            "network_up_kb": 0.0,
+        }
+        
+        try:
+            import psutil
+            
+            # Uptime
+            boot_time = psutil.boot_time()
+            uptime_seconds = psutil.time.time() - boot_time
+            days, remainder = divmod(int(uptime_seconds), 86400)
+            hours, remainder = divmod(remainder, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            if days > 0:
+                stats["uptime"] = f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                stats["uptime"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            
+            # CPU
+            stats["cpu_percent"] = psutil.cpu_percent(interval=0.1)
+            stats["cpu_cores"] = psutil.cpu_count()
+            
+            # Load average
+            if hasattr(os, 'getloadavg'):
+                stats["load_avg"] = list(os.getloadavg())
+            
+            # Memory
+            mem = psutil.virtual_memory()
+            stats["memory_percent"] = mem.percent
+            stats["memory_used_gb"] = mem.used / (1024 ** 3)
+            stats["memory_total_gb"] = mem.total / (1024 ** 3)
+            
+            # Swap
+            swap = psutil.swap_memory()
+            stats["swap_used_gb"] = swap.used / (1024 ** 3)
+            stats["swap_total_gb"] = swap.total / (1024 ** 3)
+            
+            # Network - get current totals (we'll calculate rate in the app)
+            net_io = psutil.net_io_counters()
+            stats["network_down_kb"] = net_io.bytes_recv / 1024
+            stats["network_up_kb"] = net_io.bytes_sent / 1024
+            
+        except ImportError:
+            # psutil not available, use fallback methods
+            try:
+                # Uptime from /proc/uptime
+                with open('/proc/uptime', 'r') as f:
+                    uptime_seconds = float(f.read().split()[0])
+                    days, remainder = divmod(int(uptime_seconds), 86400)
+                    hours, remainder = divmod(remainder, 3600)
+                    minutes, seconds = divmod(remainder, 60)
+                    if days > 0:
+                        stats["uptime"] = f"{days} days, {hours:02d}:{minutes:02d}:{seconds:02d}"
+                    else:
+                        stats["uptime"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            except:
+                pass
+            
+            try:
+                # Load average
+                if hasattr(os, 'getloadavg'):
+                    stats["load_avg"] = list(os.getloadavg())
+            except:
+                pass
+            
+            try:
+                # Memory from /proc/meminfo
+                with open('/proc/meminfo', 'r') as f:
+                    meminfo = {}
+                    for line in f:
+                        parts = line.split(':')
+                        if len(parts) == 2:
+                            key = parts[0].strip()
+                            value = parts[1].strip().split()[0]
+                            meminfo[key] = int(value)
+                    
+                    total = meminfo.get('MemTotal', 0)
+                    available = meminfo.get('MemAvailable', 0)
+                    if total > 0:
+                        used = total - available
+                        stats["memory_percent"] = (used / total) * 100
+                        stats["memory_used_gb"] = used / (1024 ** 2)
+                        stats["memory_total_gb"] = total / (1024 ** 2)
+                    
+                    swap_total = meminfo.get('SwapTotal', 0)
+                    swap_free = meminfo.get('SwapFree', 0)
+                    if swap_total > 0:
+                        swap_used = swap_total - swap_free
+                        stats["swap_used_gb"] = swap_used / (1024 ** 2)
+                        stats["swap_total_gb"] = swap_total / (1024 ** 2)
+            except:
+                pass
+            
+            try:
+                # CPU cores
+                stats["cpu_cores"] = os.cpu_count() or 0
+            except:
+                pass
+        
+        except Exception:
+            pass
+        
+        return stats

@@ -40,6 +40,37 @@ class RpcClient:
             elif key == "rpchost" and self.rpc_host == "127.0.0.1":
                 self.rpc_host = value
 
+    def get_staking_enabled_from_config(self) -> bool | None:
+        """Check if staking is enabled based on disablestaking config.
+        
+        Returns:
+            True if staking is enabled (disablestaking=0 or not set)
+            False if staking is disabled (disablestaking=1)
+            None if config file doesn't exist
+        """
+        path = Path(self.conf_path)
+        if not path.exists():
+            return None
+        
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            
+            if key == "disablestaking":
+                # disablestaking=1 means staking is OFF
+                # disablestaking=0 means staking is ON
+                if value == "1":
+                    return False
+                elif value == "0":
+                    return True
+        
+        # If disablestaking is not in config, assume staking is enabled
+        return True
+
     def _rpc_url(self) -> str:
         port = self.rpc_port or "8332"
         return f"http://{self.rpc_host}:{port}"
@@ -79,14 +110,46 @@ class RpcClient:
             return json.loads(output)
         except json.JSONDecodeError:
             return output
+    
+    def _cli_call_with_params(self, method: str, params: list) -> Any:
+        """Call lynx-cli with parameters."""
+        try:
+            # Convert params to strings, handling booleans properly
+            str_params = []
+            for p in params:
+                if isinstance(p, bool):
+                    str_params.append("true" if p else "false")
+                else:
+                    str_params.append(str(p))
+            
+            cmd = ["lynx-cli", method] + str_params
+            result = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return None
+        if result.returncode != 0:
+            return None
+        output = (result.stdout or "").strip()
+        if not output:
+            return None
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            return output
 
     def _safe_call(self, method: str, params: Optional[list] = None) -> Any:
         try:
             return self._rpc_call(method, params)
         except Exception:
+            # Try CLI fallback
             if params:
-                return None
-            if method.startswith("get") or method in {"uptime"}:
+                # For methods with params, try CLI with params
+                return self._cli_call_with_params(method, params)
+            if method.startswith("get") or method.startswith("list") or method in {"uptime"}:
                 return self._cli_call(method)
             return None
 
@@ -180,6 +243,8 @@ class RpcClient:
         balance = self._safe_call("getbalance") or 0
         listunspent = self._safe_call("listunspent") or []
         address_groups = self._safe_call("listaddressgroupings") or []
+        # Get all addresses including empty ones
+        all_addresses = self._safe_call("listreceivedbyaddress", [0, True]) or []
 
         immature_utxos = 0
         for utxo in listunspent:
@@ -235,7 +300,8 @@ class RpcClient:
             "block_height": blockchain.get("blocks", "-") if isinstance(blockchain, dict) else "-",
             "peer_count": peer_count,
             "peer_list": peer_list,
-            "address_groups": len(address_groups) if isinstance(address_groups, list) else 0,
+            "address_groups": address_groups,
+            "all_addresses": all_addresses,
             "rpc_port": self.rpc_port or "8332",
             "rpc_security": "secure" if self.rpc_user and self.rpc_password else "unsecure",
             "working_dir": self.working_dir,

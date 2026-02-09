@@ -105,3 +105,23 @@ class LogTailer:
             )
             lines.append((height, line_display))
         return lines
+    
+    def get_latest_block_statistics(self) -> str:
+        """Get the most recent Block Statistics line from debug.log."""
+        if not self.log_path.exists():
+            return "Block Statistics: debug.log not found"
+        try:
+            lines = self.log_path.read_text(errors="ignore").splitlines()
+        except Exception:
+            return "Block Statistics: Unable to read debug.log"
+        
+        # Search from the end for the latest Block Statistics line
+        for line in reversed(lines):
+            if "Block Statistics" in line:
+                # Extract just the statistics part after the timestamp
+                parts = line.split("Block Statistics - ", 1)
+                if len(parts) == 2:
+                    return f"Block Statistics - {parts[1].strip()}"
+                return line.strip()
+        
+        return "Block Statistics: Not yet available"
