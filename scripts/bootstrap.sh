@@ -2,8 +2,8 @@
  
  set -euo pipefail
  
- INSTALL_DIR="/usr/local/lynx-tui"
- INSTALLER_URL="https://example.com/lynx-tui/installer.sh"
+INSTALL_DIR="/usr/local/beacon"
+INSTALLER_URL="https://github.com/getlynx/Beacon/releases/latest/download/installer.sh"
  INSTALLER_PATH="${INSTALL_DIR}/installer.sh"
  
  if [ "$EUID" -ne 0 ]; then

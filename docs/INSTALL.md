@@ -1,12 +1,12 @@
- # LYNX TUI Installation
+# Beacon Installation
  
- ## Bootstrap install (placeholder URL)
+## Bootstrap install
  
  ```bash
- wget -qO- https://example.com/lynx-tui/bootstrap.sh | bash
+wget -qO- https://github.com/getlynx/Beacon/releases/latest/download/bootstrap.sh | bash
  ```
  
- This downloads the installer into `/usr/local/lynx-tui/` and executes it as root.
+This downloads the installer into `/usr/local/beacon/` and executes it as root.
  
  ## What the installer does
  

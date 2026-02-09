@@ -2,8 +2,8 @@
  
  set -euo pipefail
  
-APP_TARBALL_URL="${APP_TARBALL_URL:-https://example.com/lynx-tui/lynx-tui.tar.gz}"
- INSTALL_ROOT="/usr/local/lynx-tui"
+APP_TARBALL_URL="${APP_TARBALL_URL:-https://github.com/getlynx/Beacon/releases/latest/download/lynx-tui.tar.gz}"
+ INSTALL_ROOT="/usr/local/beacon"
  APP_DIR="${INSTALL_ROOT}/app"
  VENV_DIR="${INSTALL_ROOT}/venv"
 WORKING_DIR="${LYNX_WORKING_DIR:-/var/lib/lynx}"
@@ -63,12 +63,65 @@ LYNX_REPO="getlynx/Lynx"
  }
  
  install_launcher() {
-   cat <<'EOF' > /usr/local/bin/lynx-tui
+  cat <<'EOF' > /usr/local/bin/lynx-tui
 #!/bin/bash
-exec /usr/local/lynx-tui/venv/bin/python -m lynx_tui
+exec /usr/local/beacon/venv/bin/python -m lynx_tui
 EOF
    chmod +x /usr/local/bin/lynx-tui
  }
+
+update_login_bashrc() {
+  local target_user="${SUDO_USER:-root}"
+  local target_home
+  target_home=$(getent passwd "$target_user" | cut -d: -f6)
+  if [ -z "$target_home" ]; then
+    target_home="/root"
+  fi
+
+  local bashrc="${target_home}/.bashrc"
+  local marker_begin="# >>> beacon-lynx-tui >>>"
+  local marker_end="# <<< beacon-lynx-tui <<<"
+  local block
+
+  if [ ! -f "$bashrc" ]; then
+    touch "$bashrc"
+  fi
+
+  block=$(cat <<'EOF'
+# >>> beacon-lynx-tui >>>
+# Set alias and autostart Beacon on interactive login.
+alias beacon="/usr/local/bin/lynx-tui"
+if [[ $- == *i* ]] && shopt -q login_shell && command -v /usr/local/bin/lynx-tui >/dev/null 2>&1; then
+  if ! pgrep -u "$USER" -f "/usr/local/bin/lynx-tui" >/dev/null 2>&1; then
+    /usr/local/bin/lynx-tui
+  fi
+fi
+# <<< beacon-lynx-tui <<<
+EOF
+)
+
+  local has_begin="false"
+  local has_end="false"
+
+  if grep -qF "$marker_begin" "$bashrc"; then
+    has_begin="true"
+  fi
+  if grep -qF "$marker_end" "$bashrc"; then
+    has_end="true"
+  fi
+
+  if [ "$has_begin" = "true" ] && [ "$has_end" = "true" ]; then
+    awk -v begin="$marker_begin" -v end="$marker_end" -v new="$block" '
+      $0 == begin { print new; skip = 1; next }
+      $0 == end { skip = 0; next }
+      !skip { print }
+    ' "$bashrc" > "${bashrc}.tmp" && mv "${bashrc}.tmp" "$bashrc"
+  else
+    printf '\n%s\n' "$block" >> "$bashrc"
+  fi
+
+  chown "$target_user":"$target_user" "$bashrc" 2>/dev/null || true
+}
  
  install_sync_wait_script() {
    cat <<'EOF' > "${INSTALL_ROOT}/sync-wait.sh"
@@ -203,7 +256,7 @@ After=network.target lynx.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lynx-tui/lynx-sync-monitor.sh
+ExecStart=/usr/local/beacon/lynx-sync-monitor.sh
 EOF
 
   cat <<'EOF' > /etc/systemd/system/lynx-sync-monitor.timer
@@ -227,7 +280,7 @@ EOF
  install_systemd_units() {
    cat <<'EOF' > /etc/systemd/system/lynx-tui.service
 [Unit]
-Description=LYNX TUI
+Description=Beacon
 After=network.target lynx.service
 Wants=network.target
 
@@ -250,7 +303,7 @@ After=network.target lynx.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/lynx-tui/sync-wait.sh
+ExecStart=/usr/local/beacon/sync-wait.sh
 EOF
 
    cat <<'EOF' > /etc/systemd/system/lynx-sync-wait.timer
@@ -282,9 +335,10 @@ EOF
    fetch_app
    install_app
    install_launcher
+  update_login_bashrc
    install_sync_wait_script
    install_systemd_units
-   echo "LYNX TUI installed. It will start automatically after sync completes."
+  echo "Beacon installed. It will start automatically after sync completes."
  }
  
  main "$@"

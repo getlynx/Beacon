@@ -7,7 +7,7 @@ Description-Content-Type: text/markdown
 Requires-Dist: textual>=0.78.0
 Requires-Dist: requests>=2.31.0
 
- # LYNX TUI
+# Beacon
  
  Full-screen terminal UI for managing a LYNX blockchain node. Built with Textual.
  

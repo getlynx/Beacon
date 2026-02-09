@@ -1,1 +1,1 @@
-"""LYNX TUI package."""
+"""Beacon package."""

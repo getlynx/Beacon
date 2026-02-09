@@ -1,5 +1,5 @@
  [Unit]
- Description=LYNX TUI
+Description=Beacon
  After=network.target lynx.service
  Wants=network.target
  

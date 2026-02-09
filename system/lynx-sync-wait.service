@@ -4,4 +4,4 @@
  
  [Service]
  Type=oneshot
- ExecStart=/usr/local/lynx-tui/sync-wait.sh
+ExecStart=/usr/local/beacon/sync-wait.sh
