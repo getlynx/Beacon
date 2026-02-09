@@ -8,6 +8,11 @@ class LogTailer:
     def __init__(self) -> None:
         self.working_dir = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
         self.log_path = Path(self.working_dir) / "debug.log"
+        # Fallback to ~/.lynx if primary location doesn't exist
+        if not self.log_path.exists():
+            fallback_path = Path.home() / ".lynx" / "debug.log"
+            if fallback_path.exists():
+                self.log_path = fallback_path
         self.max_lines = 200
 
     def tail_lines(self) -> list[str]:
@@ -21,11 +26,11 @@ class LogTailer:
 
     def get_update_tip_entries(self, limit: int = 15) -> list[tuple[int, str]]:
         if not self.log_path.exists():
-            return ["debug.log not found"]
+            return [(0, "debug.log not found")]
         try:
             lines = self.log_path.read_text(errors="ignore").splitlines()
         except Exception:
-            return ["Unable to read debug.log"]
+            return [(0, "Unable to read debug.log")]
 
         entries: list[tuple[int, str, str, datetime | None, int | None]] = []
         seen: set[int] = set()
@@ -65,7 +70,7 @@ class LogTailer:
                 break
 
         if not entries:
-            return ["No UpdateTip entries."]
+            return [(0, "No UpdateTip entries.")]
 
         entries.sort(key=lambda item: item[0], reverse=True)
         lines: list[tuple[int, str]] = []
