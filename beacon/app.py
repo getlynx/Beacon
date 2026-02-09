@@ -6,10 +6,10 @@ from textual import events
 from textual.containers import Container, VerticalScroll
 from textual.widgets import Button, Footer, Header, SelectionList, Static, TabbedContent, TabPane
 
-from lynx_tui.services.logs import LogTailer
-from lynx_tui.services.pricing import PricingClient
-from lynx_tui.services.rpc import RpcClient
-from lynx_tui.services.system import SystemClient
+from beacon.services.logs import LogTailer
+from beacon.services.pricing import PricingClient
+from beacon.services.rpc import RpcClient
+from beacon.services.system import SystemClient
 
 
 class StatusBar(Static):
@@ -69,6 +69,7 @@ class CardPanel(Static):
 class HeaderlessCardPanel(CardPanel):
     def render(self) -> str:
         return "\n".join(self.lines) if self.lines else "... loading"
+
 
 class PeerListPanel(VerticalScroll):
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
@@ -178,6 +179,7 @@ class LogsPanel(Static):
     def render(self) -> str:
         content = "\n".join(self.lines) if self.lines else "No log output yet."
         return f"[{self.title}]\n{content}"
+
 
 class LynxTuiApp(App):
     BINDINGS = [
@@ -330,6 +332,7 @@ class LynxTuiApp(App):
         self.overview_wallet = CardPanel("Wallet", "wallet")
         self.overview_system = CardPanel("System", "node")
         self.overview_pricing = CardPanel("Pricing", "pricing")
+
         self.wallet_panel = KeyValuePanel("Wallet")
         self.logs_panel = LogsPanel("Debug Log")
         self.status_bar = StatusBar()
@@ -497,7 +500,6 @@ class LynxTuiApp(App):
         self.timezone_status.update(f"{status}: {message}")
         if success:
             await self.refresh_timezone()
-
 
     async def action_refresh_all(self) -> None:
         self.timezone_status.update("Refreshing...")

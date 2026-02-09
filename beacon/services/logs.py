@@ -6,18 +6,18 @@ from pathlib import Path
 
 class LogTailer:
     def __init__(self) -> None:
-         self.working_dir = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
-         self.log_path = Path(self.working_dir) / "debug.log"
-         self.max_lines = 200
- 
+        self.working_dir = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
+        self.log_path = Path(self.working_dir) / "debug.log"
+        self.max_lines = 200
+
     def tail_lines(self) -> list[str]:
-         if not self.log_path.exists():
-             return ["debug.log not found"]
-         try:
-             lines = self.log_path.read_text(errors="ignore").splitlines()
-         except Exception:
-             return ["Unable to read debug.log"]
-         return lines[-self.max_lines :]
+        if not self.log_path.exists():
+            return ["debug.log not found"]
+        try:
+            lines = self.log_path.read_text(errors="ignore").splitlines()
+        except Exception:
+            return ["Unable to read debug.log"]
+        return lines[-self.max_lines :]
 
     def get_update_tip_entries(self, limit: int = 15) -> list[tuple[int, str]]:
         if not self.log_path.exists():

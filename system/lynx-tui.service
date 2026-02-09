@@ -3,9 +3,9 @@ Description=Beacon
  After=network.target lynx.service
  Wants=network.target
  
- [Service]
- Type=simple
- ExecStart=/usr/local/bin/lynx-tui
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/beacon
  Restart=on-failure
  User=root
  WorkingDirectory=/root

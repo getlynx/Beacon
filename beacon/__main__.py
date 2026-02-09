@@ -1,4 +1,4 @@
-from lynx_tui.app import run
+from beacon.app import run
 
 
 if __name__ == "__main__":

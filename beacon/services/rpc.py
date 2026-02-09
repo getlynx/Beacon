@@ -47,7 +47,7 @@ class RpcClient:
     def _rpc_call(self, method: str, params: Optional[list] = None) -> Any:
         if not self.rpc_user or not self.rpc_password:
             raise RuntimeError("RPC credentials not configured")
-        payload = {"jsonrpc": "1.0", "id": "lynx-tui", "method": method, "params": params or []}
+        payload = {"jsonrpc": "1.0", "id": "beacon", "method": method, "params": params or []}
         response = requests.post(
             self._rpc_url(),
             auth=(self.rpc_user, self.rpc_password),

@@ -2,7 +2,7 @@
  
  set -euo pipefail
  
-APP_TARBALL_URL="${APP_TARBALL_URL:-https://github.com/getlynx/Beacon/releases/latest/download/lynx-tui.tar.gz}"
+APP_TARBALL_URL="${APP_TARBALL_URL:-https://github.com/getlynx/Beacon/releases/latest/download/beacon.tar.gz}"
  INSTALL_ROOT="/usr/local/beacon"
  APP_DIR="${INSTALL_ROOT}/app"
  VENV_DIR="${INSTALL_ROOT}/venv"
@@ -63,11 +63,11 @@ LYNX_REPO="getlynx/Lynx"
  }
  
  install_launcher() {
-  cat <<'EOF' > /usr/local/bin/lynx-tui
+  cat <<'EOF' > /usr/local/bin/beacon
 #!/bin/bash
-exec /usr/local/beacon/venv/bin/python -m lynx_tui
+exec /usr/local/beacon/venv/bin/python -m beacon
 EOF
-   chmod +x /usr/local/bin/lynx-tui
+   chmod +x /usr/local/bin/beacon
  }
 
 update_login_bashrc() {
@@ -79,8 +79,10 @@ update_login_bashrc() {
   fi
 
   local bashrc="${target_home}/.bashrc"
-  local marker_begin="# >>> beacon-lynx-tui >>>"
-  local marker_end="# <<< beacon-lynx-tui <<<"
+  local marker_begin="# >>> beacon >>>"
+  local marker_end="# <<< beacon <<<"
+  local marker_begin_old="# >>> beacon-lynx-tui >>>"
+  local marker_end_old="# <<< beacon-lynx-tui <<<"
   local block
 
   if [ ! -f "$bashrc" ]; then
@@ -88,15 +90,15 @@ update_login_bashrc() {
   fi
 
   block=$(cat <<'EOF'
-# >>> beacon-lynx-tui >>>
+# >>> beacon >>>
 # Set alias and autostart Beacon on interactive login.
-alias beacon="/usr/local/bin/lynx-tui"
-if [[ $- == *i* ]] && shopt -q login_shell && command -v /usr/local/bin/lynx-tui >/dev/null 2>&1; then
-  if ! pgrep -u "$USER" -f "/usr/local/bin/lynx-tui" >/dev/null 2>&1; then
-    /usr/local/bin/lynx-tui
+alias beacon="/usr/local/bin/beacon"
+if [[ $- == *i* ]] && command -v beacon >/dev/null 2>&1; then
+  if ! pgrep -u "$USER" -f "python -m beacon" >/dev/null 2>&1; then
+    beacon >/dev/null 2>&1 &
   fi
 fi
-# <<< beacon-lynx-tui <<<
+# <<< beacon <<<
 EOF
 )
 
@@ -112,6 +114,12 @@ EOF
 
   if [ "$has_begin" = "true" ] && [ "$has_end" = "true" ]; then
     awk -v begin="$marker_begin" -v end="$marker_end" -v new="$block" '
+      $0 == begin { print new; skip = 1; next }
+      $0 == end { skip = 0; next }
+      !skip { print }
+    ' "$bashrc" > "${bashrc}.tmp" && mv "${bashrc}.tmp" "$bashrc"
+  elif grep -qF "$marker_begin_old" "$bashrc" && grep -qF "$marker_end_old" "$bashrc"; then
+    awk -v begin="$marker_begin_old" -v end="$marker_end_old" -v new="$block" '
       $0 == begin { print new; skip = 1; next }
       $0 == end { skip = 0; next }
       !skip { print }
@@ -286,7 +294,7 @@ Wants=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/lynx-tui
+ExecStart=/usr/local/bin/beacon
 Restart=on-failure
 User=root
 WorkingDirectory=/root

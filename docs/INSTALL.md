@@ -12,7 +12,8 @@ This downloads the installer into `/usr/local/beacon/` and executes it as root.
  
  - Installs OS packages: `python3`, `pip`, `htop`, `iptables`, `curl`.
  - Downloads the app bundle and installs it into a venv.
- - Installs `lynx-tui` launcher in `/usr/local/bin/`.
+ - Installs `beacon` launcher in `/usr/local/bin/`.
+- Adds a `beacon` alias and login autostart block to `~/.bashrc`.
  - Creates systemd units and a sync-wait timer.
  - Starts the TUI automatically once the node sync completes.
  
@@ -33,5 +34,5 @@ This downloads the installer into `/usr/local/beacon/` and executes it as root.
  ## Manual start
  
  ```bash
- lynx-tui
+ beacon
  ```
