@@ -1,0 +1,15 @@
+ [Unit]
+ Description=LYNX TUI
+ After=network.target lynx.service
+ Wants=network.target
+ 
+ [Service]
+ Type=simple
+ ExecStart=/usr/local/bin/lynx-tui
+ Restart=on-failure
+ User=root
+ WorkingDirectory=/root
+ Environment=LYNX_WORKING_DIR=/var/lib/lynx
+ 
+ [Install]
+ WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+ [Unit]
+ Description=Check LYNX sync status
+ 
+ [Timer]
+ OnBootSec=2min
+ OnUnitActiveSec=5min
+ Unit=lynx-sync-wait.service
+ 
+ [Install]
+ WantedBy=timers.target

@@ -1,0 +1,7 @@
+ [Unit]
+ Description=Wait for LYNX sync completion
+ After=network.target lynx.service
+ 
+ [Service]
+ Type=oneshot
+ ExecStart=/usr/local/lynx-tui/sync-wait.sh

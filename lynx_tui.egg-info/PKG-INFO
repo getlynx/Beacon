@@ -1,0 +1,21 @@
+Metadata-Version: 2.4
+Name: lynx-tui
+Version: 0.1.0
+Summary: LYNX blockchain node TUI
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: textual>=0.78.0
+Requires-Dist: requests>=2.31.0
+
+ # LYNX TUI
+ 
+ Full-screen terminal UI for managing a LYNX blockchain node. Built with Textual.
+ 
+ ## Quick start (placeholder)
+ 
+ ```
+ wget -qO- https://example.com/lynx-tui/bootstrap.sh | bash
+ ```
+ 
+ This downloads and runs the installer, which sets up dependencies, installs the app,
+ and enables a sync-wait service that launches the TUI after the node finishes syncing.

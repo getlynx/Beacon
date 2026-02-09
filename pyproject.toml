@@ -1,0 +1,18 @@
+ [project]
+ name = "lynx-tui"
+ version = "0.1.0"
+ description = "LYNX blockchain node TUI"
+ readme = "README.md"
+ requires-python = ">=3.9"
+ dependencies = [
+   "textual>=0.78.0",
+   "requests>=2.31.0",
+ ]
+ 
+ [build-system]
+ requires = ["setuptools>=68.0", "wheel"]
+ build-backend = "setuptools.build_meta"
+ 
+ [tool.setuptools.packages.find]
+ where = ["."]
+ include = ["lynx_tui*"]
