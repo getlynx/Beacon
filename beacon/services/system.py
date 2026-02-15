@@ -199,3 +199,54 @@ class SystemClient:
             pass
         
         return stats
+
+    def get_disk_and_lynx_stats(
+        self, lynx_working_dir: str | None = None
+    ) -> Dict[str, Any]:
+        """Get disk usage for root '/' (used as 'total disk' reference).
+        Returns dict with disk_total_bytes, disk_used_bytes, disk_percent.
+        """
+        # Use root "/" as reference for "total disk" - consistent across setups.
+        # (size_on_disk from RPC is blockchain size; we compare to main system disk)
+        disk_path = "/"
+
+        stats = {
+            "disk_total_bytes": 0,
+            "disk_used_bytes": 0,
+            "disk_percent": 0.0,
+        }
+
+        try:
+            import psutil
+            du = psutil.disk_usage(disk_path)
+            stats["disk_total_bytes"] = du.total
+            stats["disk_used_bytes"] = du.used
+            stats["disk_percent"] = du.percent
+        except Exception:
+            pass
+
+        # Fallback: df -B1 for byte-sized output when psutil fails or returns 0
+        if stats["disk_total_bytes"] <= 0:
+            try:
+                result = subprocess.run(
+                    ["df", "-B1", disk_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0 and result.stdout:
+                    lines = result.stdout.strip().splitlines()
+                    if len(lines) >= 2:
+                        parts = lines[1].split()
+                        if len(parts) >= 2:
+                            total = int(parts[1])  # 1K-blocks col, -B1 makes it bytes
+                            used = int(parts[2]) if len(parts) >= 3 else 0
+                            stats["disk_total_bytes"] = total
+                            stats["disk_used_bytes"] = used
+                            stats["disk_percent"] = (
+                                100.0 * used / total if total > 0 else 0.0
+                            )
+            except (subprocess.SubprocessError, ValueError, IndexError):
+                pass
+
+        return stats

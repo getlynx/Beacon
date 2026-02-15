@@ -12,6 +12,7 @@ class RpcClient:
     def __init__(self) -> None:
         self.working_dir = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
         self.conf_path = os.environ.get("LYNX_CONF", f"{self.working_dir}/lynx.conf")
+        self.datadir: str | None = None  # from lynx.conf datadir=
         self.rpc_user = os.environ.get("LYNX_RPC_USER")
         self.rpc_password = os.environ.get("LYNX_RPC_PASSWORD")
         self.rpc_host = os.environ.get("LYNX_RPC_HOST", "127.0.0.1")
@@ -22,6 +23,7 @@ class RpcClient:
         path = Path(self.conf_path)
         if not path.exists():
             return
+        conf_dir = str(path.parent)
         for line in path.read_text().splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
@@ -29,7 +31,11 @@ class RpcClient:
             key, value = line.split("=", 1)
             key = key.strip().lower()
             value = value.strip()
-            if key == "rpcuser" and not self.rpc_user:
+            if key == "datadir":
+                self.datadir = value
+                if not os.path.isabs(value):
+                    self.datadir = os.path.normpath(os.path.join(conf_dir, value))
+            elif key == "rpcuser" and not self.rpc_user:
                 self.rpc_user = value
             elif key == "rpcpassword" and not self.rpc_password:
                 self.rpc_password = value
@@ -39,6 +45,24 @@ class RpcClient:
                 self.rpc_host = value
             elif key == "rpchost" and self.rpc_host == "127.0.0.1":
                 self.rpc_host = value
+
+    def get_datadir(self) -> str:
+        """Return the effective LYNX data directory (datadir from conf, else working_dir, else fallbacks)."""
+        if self.datadir:
+            return self.datadir
+        if self.working_dir:
+            path = Path(self.working_dir)
+            if path.exists():
+                return str(path.resolve())
+        # Fallbacks: ~/.lynx is common on Linux
+        for candidate in [
+            os.path.expanduser("~/.lynx"),
+            "/root/.lynx",
+            "/var/lib/lynx",
+        ]:
+            if os.path.isdir(candidate):
+                return candidate
+        return self.working_dir
 
     def get_staking_enabled_from_config(self) -> bool | None:
         """Check if staking is enabled based on disablestaking config.
@@ -141,6 +165,11 @@ class RpcClient:
         except json.JSONDecodeError:
             return output
 
+    def getnewaddress(self) -> Optional[str]:
+        """Generate a new receiving address. Returns the address string or None on failure."""
+        result = self._safe_call("getnewaddress")
+        return str(result) if result is not None else None
+
     def _safe_call(self, method: str, params: Optional[list] = None) -> Any:
         try:
             return self._rpc_call(method, params)
@@ -188,6 +217,48 @@ class RpcClient:
         version = first_line.split()[-1] if first_line.split() else None
         return {"name": name, "version_line": first_line, "version": version}
 
+    def get_size_on_disk(self) -> int | None:
+        """Return blockchain size on disk in bytes (from getblockchaininfo.size_on_disk)."""
+        try:
+            info = self._safe_call("getblockchaininfo")
+            if isinstance(info, dict):
+                size = info.get("size_on_disk")
+                if isinstance(size, (int, float)) and size >= 0:
+                    return int(size)
+        except Exception:
+            pass
+        return None
+
+    def fetch_capacity(self) -> Dict[str, Any] | None:
+        """Fetch storage capacity via lynx-cli capacity (hidden RPC). Returns JSON with values in KB."""
+        datadir = self.get_datadir()
+        for args in [
+            ["lynx-cli", "capacity"],
+            ["lynx-cli", "-datadir=" + datadir, "capacity"],
+        ]:
+            try:
+                result = subprocess.run(
+                    args,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except Exception:
+                continue
+            if result.returncode != 0:
+                continue
+            output = (result.stdout or "").strip()
+            if not output:
+                continue
+            try:
+                data = json.loads(output)
+                if data is not None:
+                    return data
+            except json.JSONDecodeError:
+                continue
+        return None
+
     def fetch_block_count_cli(self) -> str:
         try:
             result = subprocess.run(
@@ -204,7 +275,7 @@ class RpcClient:
         return output if output.isdigit() else "loading"
 
     def _count_stakes(self, days: int) -> int:
-        log_path = Path(self.working_dir) / "debug.log"
+        log_path = Path(self.get_datadir()) / "debug.log"
         if not log_path.exists():
             return 0
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)

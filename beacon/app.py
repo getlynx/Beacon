@@ -6,13 +6,62 @@ from datetime import datetime, timezone
 from textual.app import App, ComposeResult
 from textual import events
 from textual.containers import Container, VerticalScroll
+from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
-from textual.widgets import Button, Footer, SelectionList, Static, TabbedContent, TabPane
+from textual.widgets import Button, DataTable, Footer, SelectionList, Static, TabbedContent, TabPane
+from rich.console import Group
+from rich.text import Text
 
 from beacon.services.logs import LogTailer
 from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
 from beacon.services.system import SystemClient
+
+# High-contrast and vivid themes
+THEME_HIGH_CONTRAST_DARK = Theme(
+    name="beacon-high-contrast-dark",
+    primary="#00d4ff",
+    secondary="#00ff88",
+    accent="#ff6b00",
+    foreground="#e0e0e0",
+    background="#0d0d0d",
+    surface="#1a1a1a",
+    panel="#252525",
+    success="#00ff00",
+    warning="#ffaa00",
+    error="#ff4444",
+    dark=True,
+)
+
+THEME_HIGH_CONTRAST_LIGHT = Theme(
+    name="beacon-high-contrast-light",
+    primary="#0066cc",
+    secondary="#008844",
+    accent="#cc4400",
+    foreground="#1a1a1a",
+    background="#f5f5f5",
+    surface="#ffffff",
+    panel="#e8e8e8",
+    success="#008800",
+    warning="#aa6600",
+    error="#cc0000",
+    dark=False,
+)
+
+THEME_VIVID = Theme(
+    name="beacon-vivid",
+    primary="#00bfff",
+    secondary="#7b68ee",
+    accent="#ff1493",
+    foreground="#f0f0f0",
+    background="#1c1c2e",
+    surface="#2d2d44",
+    panel="#363656",
+    success="#32cd32",
+    warning="#ffd700",
+    error="#ff4500",
+    dark=True,
+)
 
 
 class CustomHeader(Static):
@@ -101,11 +150,12 @@ class StatusBar(Static):
         self.block_height = "-"
         self.staking = "unknown"
         self.sync_monitor = "unknown"
+        self.theme_name = "beacon-high-contrast-dark"
 
     def render(self) -> str:
         return (
             f"Node: {self.node_status} | Height: {self.block_height} | "
-            f"Staking: {self.staking} | SyncMon: {self.sync_monitor}"
+            f"Staking: {self.staking} | SyncMon: {self.sync_monitor} | Theme: {self.theme_name}"
         )
 
 
@@ -125,8 +175,8 @@ class KeyValuePanel(Static):
 
 
 class CardPanel(Static):
-    def __init__(self, title: str, accent_class: str) -> None:
-        super().__init__()
+    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)
         self.title = title
         self.accent_class = accent_class
         self.border_title = title
@@ -148,6 +198,96 @@ class HeaderlessCardPanel(CardPanel):
         return "\n".join(self.lines) if self.lines else "... loading"
 
 
+class StorageCapabilityPanel(VerticalScroll):
+    """Storage card with column layout and alternating row colors."""
+
+    LABEL_WIDTH = 10
+
+    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = title
+        self.border_title_align = ("left", "top")
+        self.add_class("card")
+        self.add_class(accent_class)
+        self._content = Static("... loading", classes="network-row-text")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def update_lines(self, lines: list[str]) -> None:
+        if not lines:
+            self._content.update("... loading")
+            return
+        formatted: list[str] = []
+        for line in lines:
+            if ": " in line:
+                label, value = line.split(": ", 1)
+                formatted.append(
+                    f"{label.strip():<{self.LABEL_WIDTH}} {value.strip()}"
+                )
+            else:
+                formatted.append(line)
+        texts = [
+            Text(ln, style="dim" if i % 2 == 1 else "")
+            for i, ln in enumerate(formatted)
+        ]
+        self._content.update(Group(*texts))
+
+
+class BlockStatsPanel(VerticalScroll):
+    """Block Statistics card with alternating row colors."""
+
+    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = title
+        self.border_title_align = ("left", "top")
+        self.border_subtitle = "5 minute block target"
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class(accent_class)
+        self._content = Static("... loading", classes="network-row-text")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def update_lines(self, lines: list[str]) -> None:
+        if not lines:
+            self._content.update("... loading")
+            return
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
+
+
+class StakingPanel(VerticalScroll):
+    """Staking card with alternating row colors like Peers."""
+
+    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.title = title
+        self.accent_class = accent_class
+        self.border_title = title
+        self.border_title_align = ("left", "top")
+        self.add_class("card")
+        self.add_class(accent_class)
+        self._content = Static("... loading", classes="network-row-text")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def update_lines(self, lines: list[str]) -> None:
+        if not lines:
+            self._content.update("... loading")
+            return
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
+
+
 class PeerListPanel(VerticalScroll):
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -157,20 +297,29 @@ class PeerListPanel(VerticalScroll):
         self.border_title_align = ("left", "top")
         self.add_class("card")
         self.add_class(accent_class)
-        self._content = Static("... loading")
+        self._content = Static("... loading", classes="network-row-text")
 
     def compose(self) -> ComposeResult:
         yield self._content
 
     def update_lines(self, lines: list[str], peer_count: int | None = None) -> None:
-        content = "\n".join(lines) if lines else "... loading"
-        self._content.update(content)
         if peer_count is not None:
-            self.border_subtitle = str(peer_count)
-            self.border_subtitle_align = ("right", "top")
+            self.border_title = f"{self.title} ({peer_count})"
+        else:
+            self.border_title = self.title
+        if not lines:
+            self._content.update("... loading")
+            return
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
 
 
 class AddressListPanel(VerticalScroll):
+    """Addresses card with DataTable for selection and copy (y key)."""
+
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.title = title
@@ -179,17 +328,47 @@ class AddressListPanel(VerticalScroll):
         self.border_title_align = ("left", "top")
         self.add_class("card")
         self.add_class(accent_class)
-        self._content = Static("... loading")
+        self._table = DataTable(id="address-table")
+        self._table.cursor_type = "row"
+        self._table.zebra_stripes = True
 
     def compose(self) -> ComposeResult:
-        yield self._content
+        yield self._table
 
-    def update_lines(self, lines: list[str], address_count: int | None = None) -> None:
-        content = "\n".join(lines) if lines else "... loading"
-        self._content.update(content)
+    def on_mount(self) -> None:
+        self._table.add_column("Address", key="address")
+        self._table.add_column("Balance", key="balance")
+        self._table.add_column("Tx", key="tx")
+        self._table.add_column("Status", key="status")
+
+    def update_lines(
+        self,
+        addr_list: list[dict],
+        address_count: int | None = None,
+        wallet_balance: object = None,
+    ) -> None:
+        self._table.clear()
+        if not addr_list:
+            self._table.add_row("No addresses found", "", "", "", key="empty")
+        else:
+            for e in addr_list:
+                addr = str(e.get("address", ""))
+                amount = e.get("amount", 0)
+                txids = e.get("txids", [])
+                confirmations = e.get("confirmations", 0)
+                bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
+                tx_count = len(txids) if isinstance(txids, list) else 0
+                status = "-" if tx_count == 0 else ("Pending" if confirmations == 0 else ("Immature" if 0 < confirmations < 31 else "Trusted"))
+                self._table.add_row(addr[:50], bal, str(tx_count) if tx_count else "-", status, key=addr)
         if address_count is not None:
-            self.border_subtitle = str(address_count)
-            self.border_subtitle_align = ("right", "top")
+            self.border_title = f"💼 Addresses ({address_count})"
+        else:
+            self.border_title = self.title
+        if isinstance(wallet_balance, (int, float)):
+            self.border_subtitle = f"Wallet Balance: {wallet_balance:.8f}"
+        else:
+            self.border_subtitle = "Wallet Balance: -"
+        self.border_subtitle_align = ("left", "bottom")
 
 
 class NetworkActivityPanel(VerticalScroll):
@@ -206,16 +385,31 @@ class NetworkActivityPanel(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield self._content
 
-    def update_entries(self, entries: list[tuple[int, str]], count: int | None = None) -> None:
+    def update_entries(
+        self,
+        entries: list[tuple[int, str]],
+        count: int | None = None,
+        time_since_latest: str | None = None,
+    ) -> None:
         self._heights = [height for height, _ in entries]
         if count is not None:
-            self.border_subtitle = str(count)
-            self.border_subtitle_align = ("right", "top")
+            self.border_title = f"{self.title} ({count})"
+        else:
+            self.border_title = self.title
+        if time_since_latest:
+            self.border_subtitle = time_since_latest
+            self.border_subtitle_align = ("right", "bottom")
+        else:
+            self.border_subtitle = ""
         if not entries:
             self._content.update("... loading")
             return
-        lines = [f"{height:>7}   {line_display}" for height, line_display in entries]
-        self._content.update("\n".join(lines))
+        lines = [f"{height:>7}  {line_display}" for height, line_display in entries]
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
 
 
 class TimezoneCard(VerticalScroll):
@@ -258,11 +452,22 @@ class LogsPanel(Static):
         return f"[{self.title}]\n{content}"
 
 
+# All built-in themes + custom themes for cycle
+THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
+    "beacon-high-contrast-dark",
+    "beacon-high-contrast-light",
+    "beacon-vivid",
+]
+
+
 class LynxTuiApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh_all", "Refresh"),
         ("s", "toggle_staking", "Toggle Staking"),
+        ("t", "cycle_theme", "Theme"),
+        ("c", "create_new_address", "New Address"),
+        ("y", "copy_address", "Copy Address"),
     ]
 
     CSS = """
@@ -276,45 +481,58 @@ class LynxTuiApp(App):
         layout: vertical;
         height: 1fr;
     }
-    #overview-content {
+    #overview-grid {
+        layout: grid;
+        grid-size: 6;
+        grid-gutter: 1 1;
+        height: 1fr;
+        width: 1fr;
+    }
+    #overview-grid > * {
+        column-span: 2;
+    }
+    #overview-pricing-column {
         layout: horizontal;
-        height: 1fr;
     }
-    #overview-right {
-        layout: vertical;
+    #overview-pricing-column > * {
         width: 1fr;
-        height: 1fr;
     }
+    #overview-system-storage-column {
+        layout: horizontal;
+    }
+    #overview-system-storage-column > * {
+        width: 1fr;
+    }
+    #overview-network,
     #overview-peers {
-        width: 1fr;
-        min-width: 30;
-        min-height: 19;
-        height: 19;
+        min-height: 22;
+        height: 1fr;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
+        overflow-y: scroll;
+    }
+    #overview-node-status {
+        min-height: 6;
+        height: auto;
     }
     #overview-addresses {
-        width: 1fr;
-        min-width: 30;
-        min-height: 19;
-        height: 19;
+        min-height: 10;
+        height: 1fr;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
+    }
+    #address-table {
+        height: 1fr;
+        scrollbar-gutter: stable;
     }
     #status-bar {
         height: 1;
     }
-    #overview-grid {
-        layout: grid;
-        grid-size: 3;
-        grid-gutter: 1 1;
-        height: 1fr;
-        width: 2fr;
-    }
     .card {
         padding: 1 1;
-        border: round #666;
+        border: round $primary-darken-2;
         height: auto;
         min-height: 6;
-    }
-    .card.wide {
-        column-span: 2;
     }
     .card.tall {
         row-span: 2;
@@ -324,22 +542,50 @@ class LynxTuiApp(App):
         min-height: 4;
     }
     .card.node {
-        color: #e6f4ff;
+        color: $primary-lighten-2;
     }
     .card.wallet {
-        color: #e9ffe9;
+        color: $success-lighten-2;
     }
     .card.staking {
-        color: #fff3d6;
+        color: $warning-lighten-2;
     }
     .card.network {
-        color: #f1e6ff;
+        color: $secondary-lighten-2;
+    }
+    .card.activity {
+        color: $accent-lighten-2;
     }
     .card.pricing {
-        color: #e6ffff;
+        color: $accent-lighten-2;
     }
     .card.sync {
-        color: #ffe6e6;
+        color: $error-lighten-2;
+    }
+    .card.node .row-alt {
+        color: $primary-darken-2;
+    }
+    .card.wallet .row-alt {
+        color: $success-darken-2;
+    }
+    .card.staking .row-alt {
+        color: $warning-darken-2;
+    }
+    .card.network .row-alt {
+        color: $secondary-darken-2;
+    }
+    .card.activity .row-alt {
+        color: $accent-darken-2;
+    }
+    .card.pricing .row-alt {
+        color: $accent-darken-2;
+    }
+    .card.sync .row-alt {
+        color: $error-darken-2;
+    }
+    #overview-block-stats {
+        min-height: 6;
+        border: solid $primary-darken-2;
     }
     #settings {
         layout: vertical;
@@ -399,11 +645,10 @@ class LynxTuiApp(App):
         self._node_version_line: str | None = None
         self.title = "...loading Beacon for the Lynx Data Storage Network"
 
-        self.overview_chain = CardPanel("Chain", "node")
-        self.overview_sync = CardPanel("Sync", "sync")
-        self.overview_network = NetworkActivityPanel("📡 Network Activity", "network")
-        self.overview_network.border_subtitle = "15"
-        self.overview_network.border_subtitle_align = ("right", "top")
+        self.node_status_card = StakingPanel("🏆 Staking", "staking", id="overview-node-status")
+        self.overview_network = NetworkActivityPanel(
+            "📡 Network Activity", "activity", id="overview-network"
+        )
         self.overview_network.add_class("wide")
         self.overview_peers = PeerListPanel("🌐 Peers", "network", id="overview-peers")
         self.overview_addresses = AddressListPanel(
@@ -413,8 +658,13 @@ class LynxTuiApp(App):
         self.overview_system = CardPanel("💻 System Utilization", "node")
         self.overview_pricing = CardPanel("💰 Pricing", "pricing")
         self.overview_value = CardPanel("💵 Value", "pricing")
+        self.overview_storage = StorageCapabilityPanel(
+            "💾 Storage Capability", "node"
+        )
 
-        self.block_stats_card = CardPanel("⏱️  Block Statistics", "sync")
+        self.block_stats_card = BlockStatsPanel(
+            "🧱 Block Statistics", "sync", id="overview-block-stats"
+        )
         self.logs_panel = LogsPanel("Debug Log")
         self.status_bar = StatusBar()
         self.timezone_select = SelectionList(id="timezone-select")
@@ -496,25 +746,82 @@ class LynxTuiApp(App):
             return "-"
         return value[:length]
 
+    @staticmethod
+    def _format_capacity_kb(value: object) -> str:
+        """Format a value in KB; if > 1024, display in MB."""
+        try:
+            kb = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if kb > 1024:
+            mb = kb / 1024
+            return f"{mb:.1f} MB"
+        return f"{kb:.0f} KB"
+
+    @staticmethod
+    def _format_bytes(value: object) -> str:
+        """Format bytes; use GB/MB as appropriate."""
+        try:
+            n = float(value)
+        except (TypeError, ValueError):
+            return "-"
+        if n >= 1024**3:
+            return f"{n / 1024**3:.1f} GB"
+        if n >= 1024**2:
+            return f"{n / 1024**2:.1f} MB"
+        return f"{n / 1024:.0f} KB"
+
+    @staticmethod
+    def _parse_capacity_to_lines(capacity_data: object) -> list[str]:
+        """Extract numeric values (KB) from capacity JSON; handle flat or nested structures."""
+
+        def extract_pairs(obj: object, prefix: str = "") -> list[tuple[str, float]]:
+            pairs: list[tuple[str, float]] = []
+            if isinstance(obj, dict):
+                for key, val in obj.items():
+                    label = key.replace("_", " ").replace("-", " ").title()
+                    full_label = f"{prefix} {label}".strip() if prefix else label
+                    if isinstance(val, (int, float)):
+                        pairs.append((full_label, float(val)))
+                    elif isinstance(val, dict):
+                        pairs.extend(extract_pairs(val, full_label))
+            elif isinstance(obj, list):
+                for i, item in enumerate(obj):
+                    sub_prefix = f"{prefix} #{i + 1}" if prefix else ("" if len(obj) == 1 else f"#{i + 1}")
+                    pairs.extend(extract_pairs(item, sub_prefix))
+            elif isinstance(obj, (int, float)):
+                pairs.append((prefix or "Capacity", float(obj)))
+            return pairs
+
+        if capacity_data is None:
+            return ["Unavailable"]
+
+        pairs = extract_pairs(capacity_data)
+        if not pairs:
+            return ["Unavailable"]
+        def clean_label(lbl: str) -> str:
+            return lbl.replace(" (Kb)", "").replace(" (kb)", "").replace(" (KB)", "")
+        return [f"{clean_label(label)}: {LynxTuiApp._format_capacity_kb(val)}" for label, val in pairs]
+
     def compose(self) -> ComposeResult:
         yield self.header
         with Container(id="body"):
             with TabbedContent():
                 with TabPane("Overview"):
                     with Container(id="overview-body"):
-                        with Container(id="overview-content"):
-                            with Container(id="overview-grid"):
-                                yield self.overview_chain
-                                yield self.overview_network
-                                yield self.overview_mempool
-                                yield self.block_stats_card
+                        with Container(id="overview-grid"):
+                            yield self.overview_network
+                            yield self.overview_peers
+                            yield self.overview_addresses
+                            yield self.node_status_card
+                            yield self.block_stats_card
+                            yield self.overview_mempool
+                            with Container(id="overview-system-storage-column"):
                                 yield self.overview_system
-                                yield self.overview_sync
+                                yield self.overview_storage
+                            with Container(id="overview-pricing-column"):
                                 yield self.overview_pricing
                                 yield self.overview_value
-                            with Container(id="overview-right"):
-                                yield self.overview_peers
-                                yield self.overview_addresses
                 with TabPane("Logs"):
                     yield self.logs_panel
                 with TabPane("Settings"):
@@ -524,6 +831,17 @@ class LynxTuiApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Register high-contrast themes
+        self.register_theme(THEME_HIGH_CONTRAST_DARK)
+        self.register_theme(THEME_HIGH_CONTRAST_LIGHT)
+        self.register_theme(THEME_VIVID)
+
+        # Set default theme and sync status bar
+        self.theme = "beacon-high-contrast-dark"
+        self.status_bar.theme_name = "beacon-high-contrast-dark"
+        self.status_bar.refresh()
+        self.status_bar.refresh()
+
         # Initialize staking state from config file
         staking_from_config = await asyncio.get_event_loop().run_in_executor(
             None, self.rpc.get_staking_enabled_from_config
@@ -541,6 +859,8 @@ class LynxTuiApp(App):
         self.set_timer(1.0, lambda: self.set_interval(5, self.auto_refresh_data))
         self.set_timer(1.2, lambda: self.set_interval(4, self.refresh_logs))
         self.set_timer(1.5, lambda: self.set_interval(60, self.refresh_block_stats))
+        self.set_timer(2.0, self.refresh_storage_capacity)
+        self.set_timer(2.0, lambda: self.set_interval(900, self.refresh_storage_capacity))
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -575,6 +895,49 @@ class LynxTuiApp(App):
         options = [(tz, tz, tz == current) for tz in timezones]
         self.timezone_select.add_options(options)
 
+    def action_copy_address(self) -> None:
+        """Copy the selected address to clipboard (bound to y key)."""
+        try:
+            table = self.query_one("#address-table", DataTable)
+            addr_panel = self.query_one("#overview-addresses")
+        except Exception:
+            return
+        focused = self.focused
+        if focused and focused != addr_panel and addr_panel not in focused.ancestors:
+            return  # Only copy when address card has focus
+        if table.row_count == 0:
+            return
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except Exception:
+            return
+        if row_key == "empty":
+            return
+        address = str(row_key)
+        try:
+            import pyperclip
+            pyperclip.copy(address)
+            self.notify("Address copied to clipboard", title="Copy")
+        except ModuleNotFoundError:
+            self.notify(
+                "Install pyperclip: pip install pyperclip",
+                title="Clipboard error",
+                severity="error",
+            )
+        except Exception as e:
+            self.notify(str(e), title="Clipboard error", severity="error")
+
+    async def action_create_new_address(self) -> None:
+        """Create a new receiving address (bound to c key)."""
+        try:
+            address = await asyncio.get_event_loop().run_in_executor(
+                None, self.rpc.getnewaddress
+            )
+            if address:
+                await self.refresh_data()
+        except Exception:
+            pass
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id != "timezone-apply":
             return
@@ -606,8 +969,25 @@ class LynxTuiApp(App):
             self.refresh_logs(),
             self.refresh_timezone_list(),
             self.refresh_timezone(),
+            self.refresh_storage_capacity(),
         )
         self.timezone_status.update("Refresh complete.")
+
+    def action_cycle_theme(self) -> None:
+        """Cycle through available themes (t key)."""
+        current = getattr(self, "theme", "beacon-high-contrast-dark") or "beacon-high-contrast-dark"
+        try:
+            idx = THEME_ORDER.index(current)
+        except ValueError:
+            idx = 0
+        next_idx = (idx + 1) % len(THEME_ORDER)
+        next_theme = THEME_ORDER[next_idx]
+        try:
+            self.theme = next_theme
+            self.status_bar.theme_name = next_theme
+            self.status_bar.refresh()
+        except Exception:
+            pass
 
     async def action_toggle_staking(self) -> None:
         """Toggle staking on/off using setstaking RPC command."""
@@ -754,23 +1134,7 @@ class LynxTuiApp(App):
         wallet_mine = balances.get("mine")
         wallet_mine = wallet_mine if isinstance(wallet_mine, dict) else {}
 
-        chain_lines = [
-            f"Network: {self._format_optional(blockchain_info.get('chain'))}",
-            f"Height: {self._format_optional(data.get('block_height'))}",
-            f"Headers: {self._format_optional(blockchain_info.get('headers'))}",
-            f"Best: {self._short_hash(data.get('best_block_hash'))}",
-            f"PoS Difficulty: {self._format_optional(pos_difficulty)}",
-            f"PoW Difficulty: {self._format_optional(pow_difficulty)}",
-            f"Total Disk Used: {self._format_bytes(blockchain_info.get('size_on_disk'))}",
-        ]
-        sync_lines = [
-            f"IBD: {self._format_bool(blockchain_info.get('initialblockdownload'))}",
-            f"Verify: {self._format_optional(blockchain_info.get('verificationprogress'))}",
-            f"Median: {self._format_timestamp(blockchain_info.get('mediantime'))}",
-            f"Tips: {tips_summary}",
-            f"Monitor: {self._format_optional(data.get('sync_monitor'))}",
-        ]
-        network_entries = self.logs.get_update_tip_entries(15)
+        network_entries, latest_block_time = self.logs.get_update_tip_entries(50)
         def fit_column(value: str, width: int) -> str:
             if len(value) <= width:
                 return value.ljust(width)
@@ -780,9 +1144,9 @@ class LynxTuiApp(App):
 
         peer_rows: list[tuple[int, str]] = []
         addr_width = 22
-        subver_width = 15
-        synced_width = 20
-        ping_width = 14
+        subver_width = 16
+        synced_width = 19
+        ping_width = 12
         for peer in peer_info:
             if not isinstance(peer, dict):
                 continue
@@ -791,6 +1155,9 @@ class LynxTuiApp(App):
                 host, port = addr.rsplit(":", 1)
                 if port.isdigit():
                     addr = host
+            addr = addr.replace("[", "").replace("]", "")
+            if addr.count(":") >= 2:
+                addr = addr[:18] if len(addr) > 18 else addr
             subver = self._format_optional(peer.get("subver")).replace("/", "")
             synced_blocks = peer.get("synced_blocks")
             synced_value = synced_blocks if isinstance(synced_blocks, int) else -1
@@ -803,7 +1170,7 @@ class LynxTuiApp(App):
             subver_col = fit_column(subver, subver_width)
             synced_col = fit_column(f"synced: {synced}", synced_width)
             ping_col = fit_column(f"ping: {ping_display}", ping_width)
-            line = f"{addr_col} {subver_col} {synced_col} {ping_col}"
+            line = f"{addr_col}{subver_col}{synced_col}{ping_col}"
             peer_rows.append((synced_value, line))
         peer_rows.sort(key=lambda row: row[0], reverse=True)
         peer_lines = [line for _, line in peer_rows]
@@ -825,6 +1192,7 @@ class LynxTuiApp(App):
                         received_lookup[addr] = addr_entry
         
         address_lines: list[str] = []
+        addr_list: list[dict] = []
         addr_width = 34
         bal_width = 16
         tx_width = 6
@@ -834,7 +1202,6 @@ class LynxTuiApp(App):
         # Use address_groups for current balances, merge with received data
         if isinstance(address_groups, list) and address_groups:
             # Convert to list with merged data
-            addr_list = []
             for group in address_groups:
                 if not isinstance(group, list):
                     continue
@@ -855,39 +1222,59 @@ class LynxTuiApp(App):
                         "txids": txids,
                         "confirmations": confirmations
                     })
-            
-            # Sort by balance descending
-            addr_list = sorted(addr_list, key=lambda x: x.get("amount", 0), reverse=True)
-            
-            for addr_entry in addr_list:
-                addr = addr_entry["address"]
-                addr_display = addr[:34] if len(addr) > 34 else addr
-                amount = addr_entry["amount"]
+        
+        # Include addresses from all_addresses (listreceivedbyaddress include_empty=true)
+        # that aren't in address_groups - e.g. newly created empty addresses
+        seen_addrs = {a["address"] for a in addr_list}
+        if isinstance(all_addresses, list):
+            for addr_entry in all_addresses:
+                if not isinstance(addr_entry, dict):
+                    continue
+                addr = addr_entry.get("address")
+                if not addr or addr in seen_addrs:
+                    continue
+                seen_addrs.add(addr)
                 txids = addr_entry.get("txids", [])
                 confirmations = addr_entry.get("confirmations", 0)
-                
-                tx_count = len(txids) if isinstance(txids, list) else 0
-                
-                # Determine status based on confirmations
-                if tx_count == 0:
-                    status = "-"
-                elif confirmations == 0:
-                    status = "Pending"
-                elif 0 < confirmations < 31:
-                    status = "Immature"
-                else:
-                    status = "Trusted"
-                
-                if isinstance(amount, (int, float)):
-                    bal_display = f"{amount:.8f}"
-                else:
-                    bal_display = "0.00000000"
-                
-                tx_display = str(tx_count) if tx_count > 0 else "-"
-                
-                line = f"{addr_display:<{addr_width}} {bal_display:>{bal_width}}   {tx_display:>{tx_width}}  {status:<{status_width}}"
-                address_lines.append(line)
-                address_count += 1
+                addr_list.append({
+                    "address": addr,
+                    "amount": 0,
+                    "txids": txids,
+                    "confirmations": confirmations
+                })
+        
+        # Sort by balance descending
+        addr_list = sorted(addr_list, key=lambda x: x.get("amount", 0), reverse=True)
+        
+        for addr_entry in addr_list:
+            addr = addr_entry["address"]
+            addr_display = addr[:34] if len(addr) > 34 else addr
+            amount = addr_entry["amount"]
+            txids = addr_entry.get("txids", [])
+            confirmations = addr_entry.get("confirmations", 0)
+            
+            tx_count = len(txids) if isinstance(txids, list) else 0
+            
+            # Determine status based on confirmations
+            if tx_count == 0:
+                status = "-"
+            elif confirmations == 0:
+                status = "Pending"
+            elif 0 < confirmations < 31:
+                status = "Immature"
+            else:
+                status = "Trusted"
+            
+            if isinstance(amount, (int, float)):
+                bal_display = f"{amount:.8f}"
+            else:
+                bal_display = "0.00000000"
+            
+            tx_display = str(tx_count) if tx_count > 0 else "-"
+            
+            line = f"{addr_display:<{addr_width}} {bal_display:>{bal_width}}   {tx_display:>{tx_width}}  {status:<{status_width}}"
+            address_lines.append(line)
+            address_count += 1
         
         if not address_lines:
             address_lines = ["No addresses found in wallet."]
@@ -898,6 +1285,18 @@ class LynxTuiApp(App):
             f"Usage: {self._format_bytes(mempool_info.get('usage'))}",
             f"Max: {self._format_bytes(mempool_info.get('maxmempool'))}",
             f"Min fee: {self._format_optional(mempool_info.get('mempoolminfee'))}",
+        ]
+        stakes_24h = data.get("stakes_24h") or 0
+        stakes_7d = data.get("stakes_7d") or 0
+        yield_24h = data.get("yield_24h") or 0
+        yield_7d = data.get("yield_7d") or 0
+        immature_utxos = data.get("immature_utxos") or 0
+        node_status_lines = [
+            f"Stakes won in last 24 hours: {stakes_24h}",
+            f"24-hour yield rate (stakes/blocks): {yield_24h}%",
+            f"Stakes won in last 7 days: {stakes_7d}",
+            f"7-day yield rate (stakes/blocks): {yield_7d}%",
+            f"Immature transactions (< 31 confirmations): {immature_utxos}",
         ]
         wallet_overview_lines = [
             f"Trusted: {self._format_optional(wallet_mine.get('trusted', data.get('wallet_balance')))}",
@@ -965,22 +1364,37 @@ class LynxTuiApp(App):
                     value_lines.append(f"{label:>6} coins  ${value:>10.2f}")
         else:
             value_lines = ["Price data unavailable"]
-        
 
-        self._schedule_update(0.1, lambda: self.overview_chain.update_lines(chain_lines))
-        self._schedule_update(0.2, lambda: self.overview_sync.update_lines(sync_lines))
-        self._schedule_update(0.2, lambda: self.overview_network.update_entries(network_entries, count=15))
+        # Storage capability refreshed separately on 15-min interval
+
+        # Time since latest block for Network Activity card
+        time_since = "-"
+        if latest_block_time:
+            elapsed = datetime.now(timezone.utc).astimezone() - latest_block_time
+            total_secs = max(0, int(elapsed.total_seconds()))
+            mins, secs = divmod(total_secs, 60)
+            time_since = f"{mins} min {secs} sec since latest block"
+        self._schedule_update(
+            0.1,
+            lambda: self.overview_network.update_entries(
+                network_entries, count=50, time_since_latest=time_since
+            ),
+        )
         self._schedule_update(0.2, lambda: self.overview_peers.update_lines(peer_lines, peer_count=peer_count))
         self._schedule_update(
             0.3,
             lambda: self.overview_addresses.update_lines(
-                address_lines, address_count=address_count
+                addr_list,
+                address_count=address_count,
+                wallet_balance=data.get("wallet_balance"),
             ),
         )
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
+        self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines))
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
         self._schedule_update(0.5, lambda: self.overview_pricing.update_lines(pricing_lines))
         self._schedule_update(0.5, lambda: self.overview_value.update_lines(value_lines))
+        self._schedule_update(0.6, self.refresh_storage_capacity)
 
         system_lines = [
             f"RPC port: {data['rpc_port']}",
@@ -1013,16 +1427,22 @@ class LynxTuiApp(App):
         lines = await asyncio.get_event_loop().run_in_executor(None, self.logs.tail_lines)
         self.logs_panel.update_lines(lines)
     
+    @staticmethod
+    def _strip_crlf(s: str) -> str:
+        """Remove carriage return and line feed characters."""
+        return s.replace("\r", "").replace("\n", "")
+
     async def refresh_block_stats(self) -> None:
         """Refresh the block statistics display."""
         stats = await asyncio.get_event_loop().run_in_executor(None, self.logs.get_latest_block_statistics)
+        stats = self._strip_crlf(stats)
         # Remove the "Block Statistics - " prefix since it's in the card title
         if stats.startswith("Block Statistics - "):
             stats = stats.replace("Block Statistics - ", "")
         # Split by comma to create separate lines for each time period
         lines = []
         for line in stats.split(","):
-            line = line.strip()
+            line = self._strip_crlf(line.strip())
             if not line:
                 continue
             # Parse the three parts: period, time, and block count
@@ -1031,9 +1451,9 @@ class LynxTuiApp(App):
             # Extract time period (before the seconds)
             period_match = re.match(r'([^:]+):\s*(\d+)s\s*(.+)', line)
             if period_match:
-                period = period_match.group(1).strip()
+                period = self._strip_crlf(period_match.group(1).strip())
                 total_seconds = int(period_match.group(2))
-                block_info = period_match.group(3).strip()
+                block_info = self._strip_crlf(period_match.group(3).strip())
                 
                 # Convert seconds to "X min Y sec" format
                 minutes, seconds = divmod(total_seconds, 60)
@@ -1044,12 +1464,54 @@ class LynxTuiApp(App):
                 else:
                     formatted_time = f"{seconds} sec"
                 
-                # Format in columns: period (15 chars), time (18 chars), block info
-                formatted_line = f"{period + ':':<15} {formatted_time:<18} {block_info}"
+                # Format in columns: fixed widths for consistent alignment
+                period_width = 16  # e.g. "last hour:", "fortnight:"
+                time_width = 20    # e.g. "9 min 27 sec", "59 min 59 sec"
+                block_width = 18   # e.g. "(7 blocks)", "(284 blocks)"
+                formatted_line = self._strip_crlf(
+                    f"{period + ':':<{period_width}} "
+                    f"{formatted_time:<{time_width}} "
+                    f"{block_info:<{block_width}}"
+                )
                 lines.append(formatted_line)
             else:
-                lines.append(line)
+                lines.append(self._strip_crlf(line))
         self.block_stats_card.update_lines(lines)
+
+    async def refresh_storage_capacity(self) -> None:
+        """Refresh the Storage Capability card (runs every 15 minutes)."""
+        loop = asyncio.get_event_loop()
+
+        def _fetch() -> tuple[object, list[str]]:
+            capacity_data = self.rpc.fetch_capacity()
+            disk_stats = self.system.get_disk_and_lynx_stats(
+                self.rpc.get_datadir()
+            )
+            size_on_disk = self.rpc.get_size_on_disk()
+            disk_lines: list[str] = []
+            if disk_stats["disk_total_bytes"] > 0:
+                disk_lines.append(
+                    f"Drive: {self._format_bytes(disk_stats['disk_total_bytes'])} "
+                    f"({disk_stats['disk_percent']:.0f}% used)"
+                )
+            if size_on_disk is not None and size_on_disk > 0:
+                disk_total = disk_stats["disk_total_bytes"]
+                lynx_pct = (
+                    100.0 * size_on_disk / disk_total if disk_total > 0 else 0.0
+                )
+                disk_lines.append(
+                    f"Lynx: {self._format_bytes(size_on_disk)} "
+                    f"({lynx_pct:.1f}% of drive)"
+                )
+            return capacity_data, disk_lines
+
+        capacity_data, disk_lines = await loop.run_in_executor(
+            None, _fetch
+        )
+        storage_lines = self._parse_capacity_to_lines(capacity_data)
+        if disk_lines:
+            storage_lines = disk_lines + storage_lines
+        self.overview_storage.update_lines(storage_lines)
 
 
 def run() -> None:
