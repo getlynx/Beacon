@@ -170,6 +170,32 @@ class RpcClient:
         result = self._safe_call("getnewaddress")
         return str(result) if result is not None else None
 
+    def sendtoaddress(self, address: str, amount: float) -> tuple[bool, str]:
+        """Send LYNX to an address. Returns (success, txid_or_error_message)."""
+        addr = address.strip()
+        if not addr:
+            return False, "Address is required"
+        try:
+            amt = float(amount)
+        except (TypeError, ValueError):
+            return False, "Invalid amount"
+        if amt <= 0:
+            return False, "Amount must be positive"
+        err_msg = "Send failed"
+        try:
+            result = self._rpc_call("sendtoaddress", [addr, amt])
+            return True, str(result) if result is not None else "Sent"
+        except Exception as e:
+            err_msg = str(e)
+        try:
+            result = self._cli_call_with_params("sendtoaddress", [addr, amt])
+            if result is not None:
+                txid = result.get("txid", result) if isinstance(result, dict) else result
+                return True, str(txid)
+        except Exception:
+            pass
+        return False, err_msg
+
     def _safe_call(self, method: str, params: Optional[list] = None) -> Any:
         try:
             return self._rpc_call(method, params)

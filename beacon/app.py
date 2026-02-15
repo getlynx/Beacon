@@ -8,7 +8,7 @@ from textual import events
 from textual.containers import Container, VerticalScroll
 from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
-from textual.widgets import Button, DataTable, Footer, SelectionList, Static, TabbedContent, TabPane
+from textual.widgets import Button, Footer, Input, SelectionList, Static, TabbedContent, TabPane
 from rich.console import Group
 from rich.text import Text
 
@@ -318,7 +318,7 @@ class PeerListPanel(VerticalScroll):
 
 
 class AddressListPanel(VerticalScroll):
-    """Addresses card with DataTable for selection and copy (y key)."""
+    """Addresses card with colored row layout."""
 
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -328,18 +328,10 @@ class AddressListPanel(VerticalScroll):
         self.border_title_align = ("left", "top")
         self.add_class("card")
         self.add_class(accent_class)
-        self._table = DataTable(id="address-table")
-        self._table.cursor_type = "row"
-        self._table.zebra_stripes = True
+        self._content = Static("... loading", classes="network-row-text")
 
     def compose(self) -> ComposeResult:
-        yield self._table
-
-    def on_mount(self) -> None:
-        self._table.add_column("Address", key="address")
-        self._table.add_column("Balance", key="balance")
-        self._table.add_column("Tx", key="tx")
-        self._table.add_column("Status", key="status")
+        yield self._content
 
     def update_lines(
         self,
@@ -347,19 +339,6 @@ class AddressListPanel(VerticalScroll):
         address_count: int | None = None,
         wallet_balance: object = None,
     ) -> None:
-        self._table.clear()
-        if not addr_list:
-            self._table.add_row("No addresses found", "", "", "", key="empty")
-        else:
-            for e in addr_list:
-                addr = str(e.get("address", ""))
-                amount = e.get("amount", 0)
-                txids = e.get("txids", [])
-                confirmations = e.get("confirmations", 0)
-                bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
-                tx_count = len(txids) if isinstance(txids, list) else 0
-                status = "-" if tx_count == 0 else ("Pending" if confirmations == 0 else ("Immature" if 0 < confirmations < 31 else "Trusted"))
-                self._table.add_row(addr[:50], bal, str(tx_count) if tx_count else "-", status, key=addr)
         if address_count is not None:
             self.border_title = f"💼 Addresses ({address_count})"
         else:
@@ -369,6 +348,24 @@ class AddressListPanel(VerticalScroll):
         else:
             self.border_subtitle = "Wallet Balance: -"
         self.border_subtitle_align = ("left", "bottom")
+        if not addr_list:
+            self._content.update("No addresses found")
+            return
+        lines: list[str] = []
+        for e in addr_list:
+            addr = str(e.get("address", ""))
+            amount = e.get("amount", 0)
+            txids = e.get("txids", [])
+            confirmations = e.get("confirmations", 0)
+            bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
+            tx_count = len(txids) if isinstance(txids, list) else 0
+            status = "-" if tx_count == 0 else ("Pending" if confirmations == 0 else ("Immature" if 0 < confirmations < 31 else "Trusted"))
+            lines.append(f"{addr[:50]:<36} {bal:>12} {str(tx_count) if tx_count else '-':>4} {status}")
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
 
 
 class NetworkActivityPanel(VerticalScroll):
@@ -410,6 +407,49 @@ class NetworkActivityPanel(VerticalScroll):
             for i, line in enumerate(lines)
         ]
         self._content.update(Group(*texts))
+
+
+class SendCard(VerticalScroll):
+    """Card for pasting address and entering amount to send LYNX."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = "📤 Send LYNX"
+        self.border_title_align = ("left", "top")
+        self.add_class("card")
+        self.add_class("wallet")
+        self._address_input = Input(
+            placeholder="Paste destination address",
+            id="send-address",
+        )
+        self._amount_input = Input(
+            placeholder="Amount in LYNX",
+            id="send-amount",
+            type="number",
+        )
+        self._status = Static("", id="send-status")
+
+    def compose(self) -> ComposeResult:
+        yield Static("Address:", classes="send-label")
+        yield self._address_input
+        yield Static("Amount:", classes="send-label")
+        yield self._amount_input
+        yield self._status
+        yield Button("Send", id="send-button", variant="primary")
+
+    def get_address(self) -> str:
+        return self._address_input.value
+
+    def get_amount(self) -> str:
+        return self._amount_input.value
+
+    def set_status(self, text: str) -> None:
+        self._status.update(text)
+
+    def clear_form(self) -> None:
+        self._address_input.value = ""
+        self._amount_input.value = ""
+        self._status.update("")
 
 
 class TimezoneCard(VerticalScroll):
@@ -467,7 +507,7 @@ class LynxTuiApp(App):
         ("s", "toggle_staking", "Toggle Staking"),
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
-        ("y", "copy_address", "Copy Address"),
+        ("x", "toggle_send_card", "Send Card"),
     ]
 
     CSS = """
@@ -521,9 +561,30 @@ class LynxTuiApp(App):
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
     }
-    #address-table {
-        height: 1fr;
-        scrollbar-gutter: stable;
+    #send-card {
+        min-height: 14;
+        height: auto;
+    }
+    #send-card .send-label {
+        height: 1;
+        margin-top: 1;
+    }
+    #send-card Input {
+        margin-bottom: 0;
+    }
+    #send-card #send-address {
+        width: 35;
+        max-width: 35;
+    }
+    #send-card #send-amount {
+        width: 15;
+        max-width: 15;
+        margin-bottom: 1;
+    }
+    #send-card #send-status {
+        height: auto;
+        min-height: 1;
+        margin-bottom: 1;
     }
     #status-bar {
         height: 1;
@@ -654,6 +715,7 @@ class LynxTuiApp(App):
         self.overview_addresses = AddressListPanel(
             "💼 Addresses", "wallet", id="overview-addresses"
         )
+        self.send_card = SendCard(id="send-card")
         self.overview_mempool = CardPanel("Mempool", "sync")
         self.overview_system = CardPanel("💻 System Utilization", "node")
         self.overview_pricing = CardPanel("💰 Pricing", "pricing")
@@ -813,6 +875,7 @@ class LynxTuiApp(App):
                             yield self.overview_network
                             yield self.overview_peers
                             yield self.overview_addresses
+                            yield self.send_card
                             yield self.node_status_card
                             yield self.block_stats_card
                             yield self.overview_mempool
@@ -895,37 +958,9 @@ class LynxTuiApp(App):
         options = [(tz, tz, tz == current) for tz in timezones]
         self.timezone_select.add_options(options)
 
-    def action_copy_address(self) -> None:
-        """Copy the selected address to clipboard (bound to y key)."""
-        try:
-            table = self.query_one("#address-table", DataTable)
-            addr_panel = self.query_one("#overview-addresses")
-        except Exception:
-            return
-        focused = self.focused
-        if focused and focused != addr_panel and addr_panel not in focused.ancestors:
-            return  # Only copy when address card has focus
-        if table.row_count == 0:
-            return
-        try:
-            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
-        except Exception:
-            return
-        if row_key == "empty":
-            return
-        address = str(row_key)
-        try:
-            import pyperclip
-            pyperclip.copy(address)
-            self.notify("Address copied to clipboard", title="Copy")
-        except ModuleNotFoundError:
-            self.notify(
-                "Install pyperclip: pip install pyperclip",
-                title="Clipboard error",
-                severity="error",
-            )
-        except Exception as e:
-            self.notify(str(e), title="Clipboard error", severity="error")
+    def action_toggle_send_card(self) -> None:
+        """Toggle Send card visibility (bound to x key)."""
+        self.send_card.display = not self.send_card.display
 
     async def action_create_new_address(self) -> None:
         """Create a new receiving address (bound to c key)."""
@@ -938,7 +973,49 @@ class LynxTuiApp(App):
         except Exception:
             pass
 
+    async def _handle_send(self) -> None:
+        """Handle Send button press: validate, call RPC, notify, refresh."""
+        try:
+            send_card = self.query_one("#send-card", SendCard)
+        except Exception:
+            return
+        address = send_card.get_address()
+        amount_str = send_card.get_amount()
+        if not address.strip():
+            send_card.set_status("Enter an address")
+            self.notify("Enter a destination address", title="Send", severity="warning")
+            return
+        if not amount_str.strip():
+            send_card.set_status("Enter an amount")
+            self.notify("Enter an amount", title="Send", severity="warning")
+            return
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            send_card.set_status("Invalid amount")
+            self.notify("Invalid amount", title="Send", severity="error")
+            return
+        if amount <= 0:
+            send_card.set_status("Amount must be positive")
+            self.notify("Amount must be positive", title="Send", severity="error")
+            return
+        send_card.set_status("Sending...")
+        success, msg = await asyncio.get_event_loop().run_in_executor(
+            None, self.rpc.sendtoaddress, address, amount
+        )
+        if success:
+            send_card.clear_form()
+            send_card.set_status("")
+            self.notify(msg if len(msg) <= 24 else f"{msg[:21]}...", title="Sent")
+            await self.refresh_data()
+        else:
+            send_card.set_status(msg[:40] + "..." if len(msg) > 40 else msg)
+            self.notify(msg, title="Send failed", severity="error")
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "send-button":
+            await self._handle_send()
+            return
         if event.button.id != "timezone-apply":
             return
         selected = self.timezone_select.selected
