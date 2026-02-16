@@ -1,6 +1,6 @@
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -108,7 +108,77 @@ class LogTailer:
             )
             result_lines.append((height, line_display))
         return (result_lines, latest_time)
-    
+
+    def get_avg_block_interval_pct_of_target(
+        self, max_age_seconds: int, min_intervals: int = 2
+    ) -> float | None:
+        """
+        Deviation of avg block interval from 5-min (300 sec) target.
+
+        (avg - 300) / 300 * 100. +1.3% = slower, -0.7% = faster, 0% = on target.
+        """
+        if not self.log_path.exists():
+            return None
+        try:
+            log_lines = self.log_path.read_text(errors="ignore").splitlines()
+        except Exception:
+            return None
+
+        entries: list[tuple[int, datetime]] = []
+        seen: set[int] = set()
+        height_re = re.compile(r"\bheight=(\d+)\b")
+        cutoff = datetime.now(timezone.utc).timestamp() - max_age_seconds
+
+        for line in reversed(log_lines[-5000:]):
+            if "UpdateTip" not in line:
+                continue
+            height_match = height_re.search(line)
+            height = int(height_match.group(1)) if height_match else -1
+            if height in seen:
+                continue
+            seen.add(height)
+            timestamp = line.split(" ", 1)[0]
+            try:
+                parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                pt = parsed.timestamp()
+                if pt < cutoff:
+                    continue
+                entries.append((height, parsed))
+            except Exception:
+                continue
+            if len(entries) >= 500:
+                break
+
+        entries.sort(key=lambda x: x[0], reverse=True)
+        intervals: list[float] = []
+        for i in range(len(entries) - 1):
+            t1 = entries[i][1].timestamp()
+            t2 = entries[i + 1][1].timestamp()
+            intervals.append(abs(t1 - t2))
+
+        if len(intervals) < min_intervals:
+            return None
+        mean_interval = sum(intervals) / len(intervals)
+        # Deviation from 300 sec target: + = slower, - = faster, 0 = on target
+        return round(((mean_interval - 300.0) / 300.0) * 100, 3)
+
+    def _period_name_to_seconds(self, period: str) -> int | None:
+        """Map period label to approximate seconds for filtering blocks."""
+        p = period.lower().strip()
+        if "hour" in p and "24" not in p:
+            return 3600
+        if "month" in p or ("30" in p and "day" in p):
+            return 30 * 86400
+        if "day" in p or "24" in p:
+            return 86400
+        if "fortnight" in p or "2 week" in p or "14" in p:
+            return 14 * 86400
+        if "week" in p:
+            return 7 * 86400
+        return None
+
     def get_latest_block_statistics(self) -> str:
         """Get the most recent Block Statistics line from debug.log."""
         if not self.log_path.exists():

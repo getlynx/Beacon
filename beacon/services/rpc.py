@@ -243,6 +243,16 @@ class RpcClient:
         version = first_line.split()[-1] if first_line.split() else None
         return {"name": name, "version_line": first_line, "version": version}
 
+    def getblock(self, block_hash: str, verbosity: int = 1) -> Dict[str, Any] | None:
+        """Fetch block details. Verbosity 1 returns hash, height, tx array."""
+        try:
+            return self._rpc_call("getblock", [block_hash, verbosity])
+        except Exception:
+            try:
+                return self._cli_call_with_params("getblock", [block_hash, str(verbosity)])
+            except Exception:
+                return None
+
     def get_size_on_disk(self) -> int | None:
         """Return blockchain size on disk in bytes (from getblockchaininfo.size_on_disk)."""
         try:

@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import time
 from datetime import datetime, timezone
 
@@ -151,12 +152,16 @@ class StatusBar(Static):
         self.staking = "unknown"
         self.sync_monitor = "unknown"
         self.theme_name = "beacon-high-contrast-dark"
+        self.theme_visible = False
 
     def render(self) -> str:
-        return (
-            f"Node: {self.node_status} | Height: {self.block_height} | "
-            f"Staking: {self.staking} | SyncMon: {self.sync_monitor} | Theme: {self.theme_name}"
+        base = (
+            f"Node: {self.node_status} | "
+            f"SyncMon: {self.sync_monitor}"
         )
+        if self.theme_visible:
+            return f"{base} | Theme: {self.theme_name}"
+        return base
 
 
 class KeyValuePanel(Static):
@@ -175,10 +180,11 @@ class KeyValuePanel(Static):
 
 
 class CardPanel(Static):
-    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+    def __init__(self, title: str, accent_class: str, alternating_rows: bool = False, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.title = title
         self.accent_class = accent_class
+        self.alternating_rows = alternating_rows
         self.border_title = title
         self.lines: list[str] = []
         self.add_class("card")
@@ -188,9 +194,16 @@ class CardPanel(Static):
         self.lines = lines
         self.update(self.render())
 
-    def render(self) -> str:
-        content = "\n".join(self.lines) if self.lines else "... loading"
-        return content
+    def render(self) -> str | Group:
+        if not self.lines:
+            return "... loading"
+        if self.alternating_rows:
+            texts = [
+                Text(line, style="dim" if i % 2 == 1 else "")
+                for i, line in enumerate(self.lines)
+            ]
+            return Group(*texts)
+        return "\n".join(self.lines)
 
 
 class HeaderlessCardPanel(CardPanel):
@@ -261,8 +274,8 @@ class BlockStatsPanel(VerticalScroll):
         self._content.update(Group(*texts))
 
 
-class StakingPanel(VerticalScroll):
-    """Staking card with alternating row colors like Peers."""
+class MemPoolPanel(VerticalScroll):
+    """Memory Pool card with alternating row colors."""
 
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -288,6 +301,41 @@ class StakingPanel(VerticalScroll):
         self._content.update(Group(*texts))
 
 
+class StakingPanel(VerticalScroll):
+    """Staking card with alternating row colors like Peers."""
+
+    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.title = title
+        self.accent_class = accent_class
+        self.border_title = title
+        self.border_title_align = ("left", "top")
+        self.border_subtitle = "Staking: loading"
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class(accent_class)
+        self._content = Static("... loading", classes="network-row-text")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def update_lines(self, lines: list[str], staking_status: str | None = None) -> None:
+        if staking_status is not None:
+            self.border_subtitle = f"Staking: {staking_status}"
+        if not lines:
+            self._content.update("... loading")
+            return
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
+
+    def update_staking_status(self, status: str) -> None:
+        """Update only the staking status subtitle (e.g. after toggle)."""
+        self.border_subtitle = f"Staking: {status}"
+
+
 class PeerListPanel(VerticalScroll):
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -295,6 +343,8 @@ class PeerListPanel(VerticalScroll):
         self.accent_class = accent_class
         self.border_title = title
         self.border_title_align = ("left", "top")
+        self.border_subtitle = "Peers checked every 2 minutes"
+        self.border_subtitle_align = ("left", "bottom")
         self.add_class("card")
         self.add_class(accent_class)
         self._content = Static("... loading", classes="network-row-text")
@@ -359,8 +409,16 @@ class AddressListPanel(VerticalScroll):
             confirmations = e.get("confirmations", 0)
             bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
             tx_count = len(txids) if isinstance(txids, list) else 0
-            status = "-" if tx_count == 0 else ("Pending" if confirmations == 0 else ("Immature" if 0 < confirmations < 31 else "Trusted"))
-            lines.append(f"{addr[:50]:<36} {bal:>12} {str(tx_count) if tx_count else '-':>4} {status}")
+            if tx_count == 0:
+                status = "-"
+            elif confirmations == 0:
+                status = "Pending"
+            elif 0 < confirmations < 31:
+                blocks_to_mature = 31 - confirmations
+                status = f"{blocks_to_mature} to mature"
+            else:
+                status = "Trusted"
+            lines.append(f"{addr[:50]:<36} {bal:>18}  {status}")
         texts = [
             Text(line, style="dim" if i % 2 == 1 else "")
             for i, line in enumerate(lines)
@@ -507,7 +565,7 @@ class LynxTuiApp(App):
         ("s", "toggle_staking", "Toggle Staking"),
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
-        ("x", "toggle_send_card", "Send Card"),
+        ("x", "toggle_send_card", "Send"),
     ]
 
     CSS = """
@@ -515,33 +573,63 @@ class LynxTuiApp(App):
         layout: vertical;
     }
     #body {
+        layout: vertical;
+        width: 1fr;
         height: 1fr;
+    }
+    TabbedContent,
+    TabPane {
+        width: 1fr;
     }
     #overview-body {
         layout: vertical;
+        width: 1fr;
         height: 1fr;
     }
     #overview-grid {
         layout: grid;
         grid-size: 6;
         grid-gutter: 1 1;
+        grid-rows: 22 auto auto;
         height: 1fr;
         width: 1fr;
     }
     #overview-grid > * {
         column-span: 2;
     }
+    #overview-mempool,
+    #overview-storage {
+        column-span: 1;
+        height: 9;
+        min-height: 6;
+        max-height: 9;
+        overflow-y: scroll;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
+    }
     #overview-pricing-column {
         layout: horizontal;
+        max-height: 11;
     }
     #overview-pricing-column > * {
         width: 1fr;
     }
     #overview-system-storage-column {
+        column-span: 1;
         layout: horizontal;
+        max-height: 11;
     }
     #overview-system-storage-column > * {
         width: 1fr;
+    }
+    #overview-system {
+        height: 1fr;
+        min-height: 4;
+    }
+    #overview-pricing,
+    #overview-value {
+        height: 1fr;
+        min-height: 4;
     }
     #overview-network,
     #overview-peers {
@@ -552,8 +640,9 @@ class LynxTuiApp(App):
         overflow-y: scroll;
     }
     #overview-node-status {
+        height: 9;
         min-height: 6;
-        height: auto;
+        max-height: 9;
     }
     #overview-addresses {
         min-height: 10;
@@ -645,7 +734,9 @@ class LynxTuiApp(App):
         color: $error-darken-2;
     }
     #overview-block-stats {
+        height: 9;
         min-height: 6;
+        max-height: 9;
         border: solid $primary-darken-2;
     }
     #settings {
@@ -716,12 +807,13 @@ class LynxTuiApp(App):
             "💼 Addresses", "wallet", id="overview-addresses"
         )
         self.send_card = SendCard(id="send-card")
-        self.overview_mempool = CardPanel("Mempool", "sync")
-        self.overview_system = CardPanel("💻 System Utilization", "node")
-        self.overview_pricing = CardPanel("💰 Pricing", "pricing")
-        self.overview_value = CardPanel("💵 Value", "pricing")
+        self.send_card.display = False  # Hidden by default, press x to show
+        self.overview_mempool = MemPoolPanel("📋 Memory Pool", "sync", id="overview-mempool")
+        self.overview_system = CardPanel("💻 System Utilization", "node", alternating_rows=True, id="overview-system")
+        self.overview_pricing = CardPanel("💰 Pricing", "pricing", alternating_rows=True, id="overview-pricing")
+        self.overview_value = CardPanel("💵 Value", "pricing", alternating_rows=True, id="overview-value")
         self.overview_storage = StorageCapabilityPanel(
-            "💾 Storage Capability", "node"
+            "💾 Storage Capability", "node", id="overview-storage"
         )
 
         self.block_stats_card = BlockStatsPanel(
@@ -741,6 +833,7 @@ class LynxTuiApp(App):
         )
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
+        self._last_notified_block_height: int | None = None
 
     @staticmethod
     def _format_optional(value: object, empty: str = "-") -> str:
@@ -875,16 +968,16 @@ class LynxTuiApp(App):
                             yield self.overview_network
                             yield self.overview_peers
                             yield self.overview_addresses
-                            yield self.send_card
                             yield self.node_status_card
                             yield self.block_stats_card
                             yield self.overview_mempool
-                            with Container(id="overview-system-storage-column"):
-                                yield self.overview_system
-                                yield self.overview_storage
+                            yield self.overview_storage
                             with Container(id="overview-pricing-column"):
                                 yield self.overview_pricing
                                 yield self.overview_value
+                            with Container(id="overview-system-storage-column"):
+                                yield self.overview_system
+                            yield self.send_card
                 with TabPane("Logs"):
                     yield self.logs_panel
                 with TabPane("Settings"):
@@ -1062,9 +1155,16 @@ class LynxTuiApp(App):
         try:
             self.theme = next_theme
             self.status_bar.theme_name = next_theme
+            self.status_bar.theme_visible = True
             self.status_bar.refresh()
+            self.set_timer(3.0, self._hide_theme_from_status_bar)
         except Exception:
             pass
+
+    def _hide_theme_from_status_bar(self) -> None:
+        """Hide theme name from status bar after a few seconds."""
+        self.status_bar.theme_visible = False
+        self.status_bar.refresh()
 
     async def action_toggle_staking(self) -> None:
         """Toggle staking on/off using setstaking RPC command."""
@@ -1082,18 +1182,18 @@ class LynxTuiApp(App):
                 None, self.rpc._safe_call, "setstaking", [command]
             )
             
-            # Update local state
+            # Update local state and staking card subtitle
             if result == "true" or result is True:
                 self._staking_enabled = True
-                self.status_bar.staking = "enabled"
+                self.node_status_card.update_staking_status("enabled")
             elif result == "false" or result is False:
                 self._staking_enabled = False
-                self.status_bar.staking = "disabled"
-            
-            self.status_bar.refresh()
+                self.node_status_card.update_staking_status("disabled")
+
+            self.node_status_card.refresh()
         except Exception as e:
-            self.status_bar.staking = f"error: {str(e)[:20]}"
-            self.status_bar.refresh()
+            self.node_status_card.update_staking_status(f"error: {str(e)[:20]}")
+            self.node_status_card.refresh()
 
     def on_selection_list_selection_toggled(self, event: SelectionList.SelectionToggled) -> None:
         if event.selection_list.id != "timezone-select":
@@ -1114,7 +1214,7 @@ class LynxTuiApp(App):
 
     async def refresh_data(self) -> None:
         data = await asyncio.get_event_loop().run_in_executor(None, self.rpc.fetch_snapshot)
-        price = await asyncio.get_event_loop().run_in_executor(None, self.pricing.fetch_price_usd)
+        price_data = await asyncio.get_event_loop().run_in_executor(None, self.pricing.fetch_price_data)
         block_height_cli = await asyncio.get_event_loop().run_in_executor(
             None, self.rpc.fetch_block_count_cli
         )
@@ -1268,12 +1368,7 @@ class LynxTuiApp(App):
                     if addr:
                         received_lookup[addr] = addr_entry
         
-        address_lines: list[str] = []
         addr_list: list[dict] = []
-        addr_width = 34
-        bal_width = 16
-        tx_width = 6
-        status_width = 9
         address_count = 0
         
         # Use address_groups for current balances, merge with received data
@@ -1323,57 +1418,27 @@ class LynxTuiApp(App):
         # Sort by balance descending
         addr_list = sorted(addr_list, key=lambda x: x.get("amount", 0), reverse=True)
         
-        for addr_entry in addr_list:
-            addr = addr_entry["address"]
-            addr_display = addr[:34] if len(addr) > 34 else addr
-            amount = addr_entry["amount"]
-            txids = addr_entry.get("txids", [])
-            confirmations = addr_entry.get("confirmations", 0)
+        address_count = len(addr_list)
             
-            tx_count = len(txids) if isinstance(txids, list) else 0
-            
-            # Determine status based on confirmations
-            if tx_count == 0:
-                status = "-"
-            elif confirmations == 0:
-                status = "Pending"
-            elif 0 < confirmations < 31:
-                status = "Immature"
-            else:
-                status = "Trusted"
-            
-            if isinstance(amount, (int, float)):
-                bal_display = f"{amount:.8f}"
-            else:
-                bal_display = "0.00000000"
-            
-            tx_display = str(tx_count) if tx_count > 0 else "-"
-            
-            line = f"{addr_display:<{addr_width}} {bal_display:>{bal_width}}   {tx_display:>{tx_width}}  {status:<{status_width}}"
-            address_lines.append(line)
-            address_count += 1
-        
-        if not address_lines:
-            address_lines = ["No addresses found in wallet."]
-            
+        chain_val = blockchain_info.get("chain", "-") if isinstance(blockchain_info, dict) else "-"
         mempool_lines = [
-            f"Txs: {self._format_optional(mempool_info.get('size'))}",
-            f"Bytes: {self._format_bytes(mempool_info.get('bytes'))}",
+            f"Network: {chain_val}",
+            f"Transactions: {self._format_optional(mempool_info.get('size'))}",
             f"Usage: {self._format_bytes(mempool_info.get('usage'))}",
             f"Max: {self._format_bytes(mempool_info.get('maxmempool'))}",
-            f"Min fee: {self._format_optional(mempool_info.get('mempoolminfee'))}",
         ]
         stakes_24h = data.get("stakes_24h") or 0
         stakes_7d = data.get("stakes_7d") or 0
         yield_24h = data.get("yield_24h") or 0
         yield_7d = data.get("yield_7d") or 0
         immature_utxos = data.get("immature_utxos") or 0
+        label_width = 48
         node_status_lines = [
-            f"Stakes won in last 24 hours: {stakes_24h}",
-            f"24-hour yield rate (stakes/blocks): {yield_24h}%",
-            f"Stakes won in last 7 days: {stakes_7d}",
-            f"7-day yield rate (stakes/blocks): {yield_7d}%",
-            f"Immature transactions (< 31 confirmations): {immature_utxos}",
+            f"{'Stakes won in last 24 hours':<{label_width}} {stakes_24h}",
+            f"{'24-hour yield rate (stakes/blocks)':<{label_width}} {yield_24h}%",
+            f"{'Stakes won in last 7 days':<{label_width}} {stakes_7d}",
+            f"{'7-day yield rate (stakes/blocks)':<{label_width}} {yield_7d}%",
+            f"{'Immature transactions (< 31 confirmations)':<{label_width}} {immature_utxos}",
         ]
         wallet_overview_lines = [
             f"Trusted: {self._format_optional(wallet_mine.get('trusted', data.get('wallet_balance')))}",
@@ -1396,37 +1461,40 @@ class LynxTuiApp(App):
         swap_total = sys_stats.get('swap_total_gb', 0)
         
         system_overview_lines = [
-            f"Uptime      {sys_stats.get('uptime', '-')}",
-            f"CPU         {cpu_pct:.1f}% cores {cpu_cores}",
-            f"Load        {load_avg[0]:.2f} {load_avg[1]:.2f} {load_avg[2]:.2f}",
-            f"Memory      {mem_pct:.2f}%",
-            f"            {mem_used:.2f}GB/{mem_total:.0f}GB",
-            f"Swap        {swap_used:.2f}GB/{swap_total:.0f}GB",
-            f"Network     Dn {sys_stats.get('network_down_kb', 0):.2f}KB",
-            f"            Up {sys_stats.get('network_up_kb', 0):.2f}KB",
+            f"Uptime   {sys_stats.get('uptime', '-')}",
+            f"CPU      {cpu_pct:.1f}% cores {cpu_cores}",
+            f"Load     {load_avg[0]:.2f} {load_avg[1]:.2f} {load_avg[2]:.2f}",
+            f"Memory   {mem_pct:.2f}%  {mem_used:.2f}GB/{mem_total:.0f}GB",
+            f"Swap     {swap_used:.2f}GB/{swap_total:.0f}GB",
+            f"Network  Dn {sys_stats.get('network_down_kb', 0):.2f}KB  Up {sys_stats.get('network_up_kb', 0):.2f}KB",
         ]
         
         # Get wallet balance for pricing calculations
         wallet_balance = data.get("wallet_balance", 0)
         balance_value = 0.0
+        price_numeric = price_data.get("priceUSD")
+        change_24h = price_data.get("change24hPct")
+        atomicdex = price_data.get("atomicdex")
+        komodo = price_data.get("komodo")
+        frei = price_data.get("frei")
         
-        # Extract numeric price from string (e.g., "$0.00000123" -> 0.00000123)
-        price_numeric = None
-        if isinstance(price, str) and price.startswith("$"):
-            try:
-                price_numeric = float(price[1:])
-            except (ValueError, IndexError):
-                pass
-        elif isinstance(price, (int, float)):
-            price_numeric = float(price)
+        price_str = f"${price_numeric:.8f}" if price_numeric is not None else "-"
+        change_str = f"{change_24h:+.2f}%" if change_24h is not None else "-"
         
         if isinstance(wallet_balance, (int, float)) and price_numeric is not None:
             balance_value = wallet_balance * price_numeric
         
+        def _fmt_usd(val: float | None) -> str:
+            return f"${val:.8f}" if val is not None and val > 0 else "-"
+        
         pricing_lines = [
-            f"Price per Coin: {price if price else '-'}",
-            f"Balance:        {wallet_balance if isinstance(wallet_balance, (int, float)) else '-'}",
-            f"Value:          ${balance_value:.2f}" if balance_value > 0 else "Value:          -",
+            f"Price per Coin:  {price_str}",
+            f"24h Change:      {change_str}",
+            f"Balance:         {wallet_balance if isinstance(wallet_balance, (int, float)) else '-'}",
+            f"Value:           ${balance_value:.2f}" if balance_value > 0 else "Value:           -",
+            f"Atomic DEX:      {_fmt_usd(atomicdex)}",
+            f"Komodo Swap:     {_fmt_usd(komodo)}",
+            f"FreiExchange:    {_fmt_usd(frei)}",
         ]
         
         # Calculate value grid for different denominations
@@ -1467,7 +1535,13 @@ class LynxTuiApp(App):
             ),
         )
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
-        self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines))
+        staking_status = (
+            "enabled" if self._staking_enabled is True
+            else "disabled" if self._staking_enabled is False
+            else "syncing" if isinstance(blockchain_info, dict) and blockchain_info.get("initialblockdownload")
+            else "unknown"
+        )
+        self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines, staking_status=staking_status))
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
         self._schedule_update(0.5, lambda: self.overview_pricing.update_lines(pricing_lines))
         self._schedule_update(0.5, lambda: self.overview_value.update_lines(value_lines))
@@ -1484,17 +1558,54 @@ class LynxTuiApp(App):
         def update_status() -> None:
             self.status_bar.node_status = data["daemon_status"]
             self.status_bar.block_height = block_height_cli
-            
-            # Update staking status: use tracked state if available, otherwise show sync state
-            if self._staking_enabled is True:
-                self.status_bar.staking = "enabled"
-            elif self._staking_enabled is False:
-                self.status_bar.staking = "disabled"
-            elif isinstance(blockchain_info, dict) and blockchain_info.get("initialblockdownload"):
-                self.status_bar.staking = "syncing"
+            # New block notification
+            block_height = blockchain_info.get("blocks") if isinstance(blockchain_info, dict) else None
+            if block_height is not None:
+                try:
+                    bh = int(block_height)
+                except (TypeError, ValueError):
+                    bh = None
             else:
-                self.status_bar.staking = "unknown"
+                bh = int(block_height_cli) if isinstance(block_height_cli, str) and block_height_cli.isdigit() else None
+            if bh is not None:
+                if self._last_notified_block_height is None:
+                    self._last_notified_block_height = bh
+                elif bh > self._last_notified_block_height:
+                    self._last_notified_block_height = bh  # Prevent duplicate notifications
+                    best_hash = data.get("best_block_hash")
+                    if best_hash and isinstance(best_hash, str):
+                        def _fetch_and_notify() -> None:
+                            block = self.rpc.getblock(best_hash, 1)
+                            if block and isinstance(block, dict):
+                                h = block.get("height", bh)
+                                hsh = block.get("hash", best_hash[:16])
+                                tx_list = block.get("tx")
+                                n_tx_raw = block.get("nTx") or (len(tx_list) if isinstance(tx_list, list) else None)
+                                n_tx = max(0, (n_tx_raw or 0) - 2) if isinstance(n_tx_raw, (int, float)) else "?"
+                                self.notify(
+                                    f"Height {h} | {hsh[:12]}... | {n_tx} tx",
+                                    title="New block",
+                                    timeout=15,
+                                )
+                            else:
+                                self.notify(
+                                    f"Height {bh} | {best_hash[:12]}...",
+                                    title="New block",
+                                    timeout=15,
+                                )
+                        self.call_later(_fetch_and_notify)
+                    else:
+                        self.notify(f"Height {bh}", title="New block", timeout=15)
             
+            # Update staking status on card: use tracked state if available, otherwise show sync state
+            staking_status = (
+                "enabled" if self._staking_enabled is True
+                else "disabled" if self._staking_enabled is False
+                else "syncing" if isinstance(blockchain_info, dict) and blockchain_info.get("initialblockdownload")
+                else "unknown"
+            )
+            self.node_status_card.update_staking_status(staking_status)
+
             self.status_bar.sync_monitor = data["sync_monitor"]
             self.status_bar.refresh()
 
@@ -1509,50 +1620,65 @@ class LynxTuiApp(App):
         """Remove carriage return and line feed characters."""
         return s.replace("\r", "").replace("\n", "")
 
-    async def refresh_block_stats(self) -> None:
-        """Refresh the block statistics display."""
-        stats = await asyncio.get_event_loop().run_in_executor(None, self.logs.get_latest_block_statistics)
+    def _fetch_block_stats_with_std_dev(self) -> tuple[str, list[tuple[str, int, str]], dict[str, float | None]]:
+        """Fetch block stats and avg block interval % of 300 sec target (run in executor).
+
+        E.g. 5 min 4 sec avg -> 101.3%. 100% = on target.
+        """
+        stats = self.logs.get_latest_block_statistics()
         stats = self._strip_crlf(stats)
-        # Remove the "Block Statistics - " prefix since it's in the card title
-        if stats.startswith("Block Statistics - "):
-            stats = stats.replace("Block Statistics - ", "")
-        # Split by comma to create separate lines for each time period
-        lines = []
-        for line in stats.split(","):
+        raw = stats.replace("Block Statistics - ", "").strip()
+        periods: list[tuple[str, int, str]] = []
+        for line in raw.split(","):
             line = self._strip_crlf(line.strip())
             if not line:
                 continue
-            # Parse the three parts: period, time, and block count
-            # Expected format: "last hour: 233s (16 blocks)"
-            import re
-            # Extract time period (before the seconds)
-            period_match = re.match(r'([^:]+):\s*(\d+)s\s*(.+)', line)
-            if period_match:
-                period = self._strip_crlf(period_match.group(1).strip())
-                total_seconds = int(period_match.group(2))
-                block_info = self._strip_crlf(period_match.group(3).strip())
-                
-                # Convert seconds to "X min Y sec" format
-                minutes, seconds = divmod(total_seconds, 60)
-                if minutes > 0 and seconds > 0:
-                    formatted_time = f"{minutes} min {seconds} sec"
-                elif minutes > 0:
-                    formatted_time = f"{minutes} min"
-                else:
-                    formatted_time = f"{seconds} sec"
-                
-                # Format in columns: fixed widths for consistent alignment
-                period_width = 16  # e.g. "last hour:", "fortnight:"
-                time_width = 20    # e.g. "9 min 27 sec", "59 min 59 sec"
-                block_width = 18   # e.g. "(7 blocks)", "(284 blocks)"
-                formatted_line = self._strip_crlf(
-                    f"{period + ':':<{period_width}} "
-                    f"{formatted_time:<{time_width}} "
-                    f"{block_info:<{block_width}}"
-                )
-                lines.append(formatted_line)
+            m = re.match(r"([^:]+):\s*(\d+)s\s*(.+)", line)
+            if m:
+                periods.append((
+                    self._strip_crlf(m.group(1).strip()),
+                    int(m.group(2)),
+                    self._strip_crlf(m.group(3).strip()),
+                ))
+        avg_pcts: dict[str, float | None] = {}
+        for period, _, _ in periods:
+            secs = self.logs._period_name_to_seconds(period)
+            if secs:
+                avg_pcts[period] = self.logs.get_avg_block_interval_pct_of_target(secs)
             else:
-                lines.append(self._strip_crlf(line))
+                avg_pcts[period] = None
+        return stats, periods, avg_pcts
+
+    async def refresh_block_stats(self) -> None:
+        """Refresh the block statistics display."""
+        stats, periods, avg_pcts = await asyncio.get_event_loop().run_in_executor(
+            None, self._fetch_block_stats_with_std_dev
+        )
+        lines = []
+        for period, total_seconds, block_info in periods:
+            minutes, secs = divmod(total_seconds, 60)
+            if minutes > 0 and secs > 0:
+                formatted_time = f"{minutes} min {secs} sec"
+            elif minutes > 0:
+                formatted_time = f"{minutes} min"
+            else:
+                formatted_time = f"{secs} sec"
+            pct = avg_pcts.get(period)
+            pct_col = f"{pct:+.3f}%" if pct is not None else "-"
+            period_width = 16
+            time_width = 20
+            block_width = 18
+            pct_width = 11
+            formatted_line = self._strip_crlf(
+                f"{period + ':':<{period_width}} "
+                f"{formatted_time:<{time_width}} "
+                f"{block_info:<{block_width}} "
+                f"{pct_col:>{pct_width}}"
+            )
+            lines.append(formatted_line)
+        if not lines:
+            fallback = stats.replace("Block Statistics - ", "").strip() if "Block Statistics" in stats else stats
+            lines = [self._strip_crlf(fallback)] if fallback else ["Block Statistics: Not yet available"]
         self.block_stats_card.update_lines(lines)
 
     async def refresh_storage_capacity(self) -> None:
