@@ -504,8 +504,9 @@ class SendCard(VerticalScroll):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "📤 Send LYNX"
+        self.border_title = "💸 Send"
         self.border_title_align = ("left", "top")
+        self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
         self.add_class("wallet")
         self._address_input = Input(
@@ -513,19 +514,18 @@ class SendCard(VerticalScroll):
             id="send-address",
         )
         self._amount_input = Input(
-            placeholder="Amount in LYNX",
+            placeholder="Amount",
             id="send-amount",
             type="number",
         )
         self._status = Static("", id="send-status")
 
     def compose(self) -> ComposeResult:
-        yield Static("Address:", classes="send-label")
-        yield self._address_input
-        yield Static("Amount:", classes="send-label")
-        yield self._amount_input
+        with Container(id="send-inputs-row"):
+            yield self._address_input
+            yield self._amount_input
+            yield Button("Send", id="send-button", variant="primary")
         yield self._status
-        yield Button("Send", id="send-button", variant="primary")
 
     def get_address(self) -> str:
         return self._address_input.value
@@ -536,9 +536,62 @@ class SendCard(VerticalScroll):
     def set_status(self, text: str) -> None:
         self._status.update(text)
 
+    def set_txid(self, txid: str) -> None:
+        """Display transaction ID in the title bar (lower right) for 1 minute."""
+        self.border_subtitle = txid
+        self.refresh()
+
+    def clear_txid(self) -> None:
+        """Clear the transaction ID from the title bar."""
+        self.border_subtitle = ""
+        self.refresh()
+
     def clear_form(self) -> None:
         self._address_input.value = ""
         self._amount_input.value = ""
+        self._status.update("")
+
+
+class SweepCard(VerticalScroll):
+    """Card for sweeping full balance to an address."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = "🧹 Sweep"
+        self.border_title_align = ("left", "top")
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class("wallet")
+        self._address_input = Input(
+            placeholder="Paste destination address",
+            id="sweep-address",
+        )
+        self._status = Static("", id="sweep-status")
+
+    def compose(self) -> ComposeResult:
+        with Container(id="sweep-inputs-row"):
+            yield self._address_input
+            yield Button("Sweep", id="sweep-button", variant="primary")
+        yield self._status
+
+    def get_address(self) -> str:
+        return self._address_input.value
+
+    def set_status(self, text: str) -> None:
+        self._status.update(text)
+
+    def set_txid(self, txid: str) -> None:
+        """Display transaction ID in the title bar (lower right) for 1 minute."""
+        self.border_subtitle = txid
+        self.refresh()
+
+    def clear_txid(self) -> None:
+        """Clear the transaction ID from the title bar."""
+        self.border_subtitle = ""
+        self.refresh()
+
+    def clear_form(self) -> None:
+        self._address_input.value = ""
         self._status.update("")
 
 
@@ -608,6 +661,7 @@ class LynxTuiApp(App):
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
         ("x", "toggle_send_card", "Send"),
+        ("w", "toggle_sweep_card", "Sweep"),
     ]
 
     CSS = """
@@ -657,7 +711,7 @@ class LynxTuiApp(App):
         width: 1fr;
     }
     #overview-system-storage-column {
-        column-span: 1;
+        column-span: 2;
         layout: horizontal;
         max-height: 11;
     }
@@ -669,9 +723,11 @@ class LynxTuiApp(App):
         min-height: 4;
     }
     #overview-pricing,
-    #overview-value {
+    #overview-value,
+    #overview-daemon-status {
         height: 1fr;
         min-height: 4;
+        max-height: 11;
     }
     #overview-network,
     #overview-peers {
@@ -693,29 +749,80 @@ class LynxTuiApp(App):
         scrollbar-gutter: stable;
     }
     #send-card {
-        min-height: 14;
+        height: 11;
+        min-height: 11;
+        max-height: 11;
+        padding: 2 2 1 2;
+        align: center middle;
+        align-horizontal: center;
+    }
+    #send-inputs-row {
+        layout: horizontal;
+        width: auto;
         height: auto;
     }
-    #send-card .send-label {
-        height: 1;
-        margin-top: 1;
+    #send-inputs-row #send-address {
+        width: 38;
+        max-width: 38;
+        margin-right: 1;
+        height: 3;
+    }
+    #send-inputs-row #send-amount {
+        width: 14;
+        max-width: 14;
+        height: 3;
+        margin-right: 1;
+    }
+    #send-inputs-row #send-button {
+        min-width: 8;
+        width: auto;
+        padding: 0 2;
+        height: 3;
     }
     #send-card Input {
-        margin-bottom: 0;
-    }
-    #send-card #send-address {
-        width: 35;
-        max-width: 35;
-    }
-    #send-card #send-amount {
-        width: 15;
-        max-width: 15;
-        margin-bottom: 1;
+        margin: 0;
+        padding: 0 1;
     }
     #send-card #send-status {
+        width: auto;
         height: auto;
-        min-height: 1;
-        margin-bottom: 1;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        text-wrap: nowrap;
+    }
+    #sweep-card {
+        height: 11;
+        min-height: 11;
+        max-height: 11;
+        padding: 2 2 1 2;
+        align: center middle;
+        align-horizontal: center;
+    }
+    #sweep-inputs-row {
+        layout: horizontal;
+        width: auto;
+        height: auto;
+    }
+    #sweep-inputs-row #sweep-address {
+        width: 38;
+        max-width: 38;
+        margin-right: 1;
+        height: 3;
+    }
+    #sweep-inputs-row #sweep-button {
+        min-width: 8;
+        width: auto;
+        padding: 0 2;
+        height: 3;
+    }
+    #sweep-card #sweep-status {
+        width: auto;
+        height: auto;
+        min-height: 0;
+        margin: 0;
+        padding: 0;
+        text-wrap: nowrap;
     }
     #status-bar {
         height: 1;
@@ -866,6 +973,9 @@ class LynxTuiApp(App):
         self.system = SystemClient()
         self._node_name: str | None = None
         self._node_version_line: str | None = None
+        self._node_version: str | None = None
+        self._send_txid_timer = None
+        self._sweep_txid_timer = None
         self.title = "...loading Beacon for the Lynx Data Storage Network"
 
         self.node_status_card = StakingPanel("🏆 Staking", "staking", id="overview-node-status")
@@ -879,8 +989,11 @@ class LynxTuiApp(App):
         )
         self.send_card = SendCard(id="send-card")
         self.send_card.display = False  # Hidden by default, press x to show
+        self.sweep_card = SweepCard(id="sweep-card")
+        self.sweep_card.display = False  # Hidden by default, press w to show
         self.overview_mempool = MemPoolPanel("📋 Memory Pool", "sync", id="overview-mempool")
         self.overview_system = CardPanel("💻 System Utilization", "node", alternating_rows=True, id="overview-system")
+        self.overview_daemon_status = CardPanel("🟢 Daemon Status", "node", alternating_rows=True, id="overview-daemon-status")
         self.overview_pricing = CardPanel("💰 Pricing", "pricing", alternating_rows=True, id="overview-pricing")
         self.overview_value = CardPanel("💵 Value", "pricing", alternating_rows=True, id="overview-value")
         self.overview_storage = StorageCapabilityPanel(
@@ -1058,7 +1171,9 @@ class LynxTuiApp(App):
                                 yield self.overview_value
                             with Container(id="overview-system-storage-column"):
                                 yield self.overview_system
+                                yield self.overview_daemon_status
                             yield self.send_card
+                            yield self.sweep_card
                 with TabPane("Settings"):
                     with Container(id="settings"):
                         with Container(id="settings-row"):
@@ -1107,10 +1222,13 @@ class LynxTuiApp(App):
         if isinstance(node_version, dict):
             name = node_version.get("name")
             version_line = node_version.get("version_line")
+            version = node_version.get("version")
             if isinstance(name, str) and name.strip():
                 self._node_name = name.strip()
             if isinstance(version_line, str) and version_line.strip():
                 self._node_version_line = version_line.strip()
+            if isinstance(version, str) and version.strip():
+                self._node_version = version.strip()
         if self._node_name:
             self.title = f"{self._node_name} Beacon for the Lynx Data Storage Network"
 
@@ -1143,8 +1261,16 @@ class LynxTuiApp(App):
         self.currency_status.update(f"Display currency: {self._currency}")
 
     def action_toggle_send_card(self) -> None:
-        """Toggle Send card visibility (bound to x key)."""
+        """Toggle Send card visibility (bound to x key). Hides Sweep if active."""
+        if self.sweep_card.display:
+            self.sweep_card.display = False
         self.send_card.display = not self.send_card.display
+
+    def action_toggle_sweep_card(self) -> None:
+        """Toggle Sweep card visibility (bound to w key). Hides Send if active."""
+        if self.send_card.display:
+            self.send_card.display = False
+        self.sweep_card.display = not self.sweep_card.display
 
     async def action_create_new_address(self) -> None:
         """Create a new receiving address (bound to c key)."""
@@ -1190,15 +1316,48 @@ class LynxTuiApp(App):
         if success:
             send_card.clear_form()
             send_card.set_status("")
-            self.notify(msg if len(msg) <= 24 else f"{msg[:21]}...", title="Sent")
+            send_card.set_txid(msg)
+            if self._send_txid_timer:
+                self._send_txid_timer.stop()
+            self._send_txid_timer = self.set_timer(60, lambda: send_card.clear_txid())
             await self.refresh_data()
         else:
             send_card.set_status(msg[:40] + "..." if len(msg) > 40 else msg)
             self.notify(msg, title="Send failed", severity="error")
 
+    async def _handle_sweep(self) -> None:
+        """Handle Sweep button press: validate address, sweep full balance, show txid."""
+        try:
+            sweep_card = self.query_one("#sweep-card", SweepCard)
+        except Exception:
+            return
+        address = sweep_card.get_address()
+        if not address.strip():
+            sweep_card.set_status("Enter an address")
+            self.notify("Enter a destination address", title="Sweep", severity="warning")
+            return
+        sweep_card.set_status("Sweeping...")
+        success, msg = await asyncio.get_event_loop().run_in_executor(
+            None, self.rpc.sweep_to_address, address
+        )
+        if success:
+            sweep_card.clear_form()
+            sweep_card.set_status("")
+            sweep_card.set_txid(msg)
+            if self._sweep_txid_timer:
+                self._sweep_txid_timer.stop()
+            self._sweep_txid_timer = self.set_timer(60, lambda: sweep_card.clear_txid())
+            await self.refresh_data()
+        else:
+            sweep_card.set_status(msg[:40] + "..." if len(msg) > 40 else msg)
+            self.notify(msg, title="Sweep failed", severity="error")
+
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send-button":
             await self._handle_send()
+            return
+        if event.button.id == "sweep-button":
+            await self._handle_sweep()
             return
         if event.button.id == "currency-apply":
             selected = self.currency_select.selected
@@ -1439,7 +1598,7 @@ class LynxTuiApp(App):
         peer_rows: list[tuple[int, str]] = []
         addr_width = 22
         subver_width = 16
-        synced_width = 19
+        synced_width = 11
         ping_width = 12
         for peer in peer_info:
             if not isinstance(peer, dict):
@@ -1462,7 +1621,7 @@ class LynxTuiApp(App):
                 ping_display = f"{ping:.3f}s"
             addr_col = fit_column(addr, addr_width)
             subver_col = fit_column(subver, subver_width)
-            synced_col = fit_column(f"synced: {synced}", synced_width)
+            synced_col = fit_column(synced, synced_width)
             ping_col = fit_column(f"ping: {ping_display}", ping_width)
             line = f"{addr_col}{subver_col}{synced_col}{ping_col}"
             peer_rows.append((synced_value, line))
@@ -1581,9 +1740,25 @@ class LynxTuiApp(App):
         mem_total = sys_stats.get('memory_total_gb', 0)
         swap_used = sys_stats.get('swap_used_gb', 0)
         swap_total = sys_stats.get('swap_total_gb', 0)
-        
+
+        # Daemon uptime from lynx-cli uptime (seconds) -> "Xm Ys" or "Xh Ym Zs"
+        uptime_secs = data.get("uptime")
+        if isinstance(uptime_secs, (int, float)) and uptime_secs >= 0:
+            total = int(uptime_secs)
+            hours, remainder = divmod(total, 3600)
+            mins, secs = divmod(remainder, 60)
+            if hours > 0:
+                uptime_display = f"{hours}h {mins}m {secs}s"
+            elif mins > 0:
+                uptime_display = f"{mins}m {secs}s"
+            else:
+                uptime_display = f"{secs}s"
+        else:
+            uptime_display = "-"
+
+        daemon_version = self._node_version or "-"
+
         system_overview_lines = [
-            f"Uptime   {sys_stats.get('uptime', '-')}",
             f"CPU      {cpu_pct:.1f}% cores {cpu_cores}",
             f"Load     {load_avg[0]:.2f} {load_avg[1]:.2f} {load_avg[2]:.2f}",
             f"Memory   {mem_pct:.2f}%  {mem_used:.2f}GB/{mem_total:.0f}GB",
@@ -1656,7 +1831,7 @@ class LynxTuiApp(App):
             elapsed = datetime.now(timezone.utc).astimezone() - latest_block_time
             total_secs = max(0, int(elapsed.total_seconds()))
             mins, secs = divmod(total_secs, 60)
-            time_since = f"{mins} min {secs} sec since latest block"
+            time_since = f"{mins}m {secs}s since latest block"
         self._schedule_update(
             0.1,
             lambda: self.overview_network.update_entries(
@@ -1681,7 +1856,13 @@ class LynxTuiApp(App):
             else "unknown"
         )
         self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines, staking_status=staking_status))
+        daemon_status_lines = [
+            f"Lynx Uptime  {uptime_display}",
+            f"Version      {daemon_version}",
+            f"Tenant       unregistered",
+        ]
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
+        self._schedule_update(0.4, lambda: self.overview_daemon_status.update_lines(daemon_status_lines))
         self._schedule_update(0.5, lambda: self.overview_pricing.update_lines(pricing_lines))
         self._schedule_update(0.5, lambda: self.overview_value.update_lines(value_lines))
         self._schedule_update(0.6, self.refresh_storage_capacity)
@@ -1755,11 +1936,8 @@ class LynxTuiApp(App):
         """Remove carriage return and line feed characters."""
         return s.replace("\r", "").replace("\n", "")
 
-    def _fetch_block_stats_with_std_dev(self) -> tuple[str, list[tuple[str, int, str]], dict[str, float | None]]:
-        """Fetch block stats and avg block interval % of 300 sec target (run in executor).
-
-        E.g. 5 min 4 sec avg -> 101.3%. 100% = on target.
-        """
+    def _fetch_block_stats(self) -> tuple[str, list[tuple[str, int, str]]]:
+        """Fetch block stats (run in executor)."""
         stats = self.logs.get_latest_block_statistics()
         stats = self._strip_crlf(stats)
         raw = stats.replace("Block Statistics - ", "").strip()
@@ -1775,22 +1953,15 @@ class LynxTuiApp(App):
                     int(m.group(2)),
                     self._strip_crlf(m.group(3).strip()),
                 ))
-        avg_pcts: dict[str, float | None] = {}
-        for period, _, _ in periods:
-            secs = self.logs._period_name_to_seconds(period)
-            if secs:
-                avg_pcts[period] = self.logs.get_avg_block_interval_pct_of_target(secs)
-            else:
-                avg_pcts[period] = None
-        return stats, periods, avg_pcts
+        return stats, periods
 
     async def refresh_block_stats(self) -> None:
         """Refresh the block statistics display."""
-        stats, periods, avg_pcts = await asyncio.get_event_loop().run_in_executor(
-            None, self._fetch_block_stats_with_std_dev
+        stats, periods = await asyncio.get_event_loop().run_in_executor(
+            None, self._fetch_block_stats
         )
         lines = []
-        for i, (period, total_seconds, block_info) in enumerate(periods):
+        for period, total_seconds, block_info in periods:
             minutes, secs = divmod(total_seconds, 60)
             if minutes > 0 and secs > 0:
                 formatted_time = f"{minutes} min {secs} sec"
@@ -1798,18 +1969,13 @@ class LynxTuiApp(App):
                 formatted_time = f"{minutes} min"
             else:
                 formatted_time = f"{secs} sec"
-            # Skip deviation for first row (last hour) - can be misleading
-            pct = avg_pcts.get(period) if i > 0 else None
-            pct_col = f"{pct:+.3f}%" if pct is not None else ""
             period_width = 16
             time_width = 20
             block_width = 18
-            pct_width = 11
             formatted_line = self._strip_crlf(
                 f"{period + ':':<{period_width}} "
                 f"{formatted_time:<{time_width}} "
-                f"{block_info:<{block_width}} "
-                f"{pct_col:>{pct_width}}"
+                f"{block_info:<{block_width}}"
             )
             lines.append(formatted_line)
         if not lines:
@@ -1840,7 +2006,7 @@ class LynxTuiApp(App):
                 )
                 disk_lines.append(
                     f"Lynx: {self._format_bytes(size_on_disk)} "
-                    f"({lynx_pct:.1f}% of drive)"
+                    f"({lynx_pct:.1f}% used)"
                 )
             return capacity_data, disk_lines
 

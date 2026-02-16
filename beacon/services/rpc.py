@@ -196,6 +196,36 @@ class RpcClient:
             pass
         return False, err_msg
 
+    def sweep_to_address(self, address: str) -> tuple[bool, str]:
+        """Sweep full balance to an address. Uses sendtoaddress(addr, getbalance(), "", "", true).
+        Returns (success, txid_or_error_message)."""
+        addr = address.strip()
+        if not addr:
+            return False, "Address is required"
+        err_msg = "Sweep failed"
+        try:
+            balance = self._safe_call("getbalance")
+            bal = float(balance) if balance is not None else 0.0
+            if bal <= 0:
+                return False, "No balance to sweep"
+            # sendtoaddress(address, amount, comment, comment_to, subtractfeefromamount)
+            result = self._rpc_call("sendtoaddress", [addr, bal, "", "", True])
+            return True, str(result) if result is not None else "Swept"
+        except Exception as e:
+            err_msg = str(e)
+        try:
+            balance = self._safe_call("getbalance")
+            bal = float(balance) if balance is not None else 0.0
+            if bal <= 0:
+                return False, "No balance to sweep"
+            result = self._cli_call_with_params("sendtoaddress", [addr, bal, "", "", True])
+            if result is not None:
+                txid = result.get("txid", result) if isinstance(result, dict) else result
+                return True, str(txid)
+        except Exception:
+            pass
+        return False, err_msg
+
     def _safe_call(self, method: str, params: Optional[list] = None) -> Any:
         try:
             return self._rpc_call(method, params)
