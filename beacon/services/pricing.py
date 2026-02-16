@@ -1,5 +1,5 @@
 import os
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -63,3 +63,42 @@ class PricingClient:
             except Exception:
                 continue
         return result
+
+    def fetch_usd_to_currency_rate(self, target: str) -> float | None:
+        """Fetch USD to target currency rate. Tries primary, secondary, then tertiary API (all free, no keys).
+        Target must be uppercase (e.g. EUR, GBP, JPY). Returns None if all APIs fail."""
+        if not target or target == "USD":
+            return 1.0
+        target_upper = target.upper()
+        target_lower = target_upper.lower()
+        # Each tuple: (url, extractor). URL may use {symbols} for Frankfurter.
+        base_urls = [
+            os.environ.get(
+                "LYNX_FX_API_PRIMARY",
+                "https://api.frankfurter.dev/v1/latest?base=USD&symbols=" + target_upper,
+            ),
+            os.environ.get(
+                "LYNX_FX_API_BACKUP",
+                "https://open.er-api.com/v6/latest/USD",
+            ),
+            os.environ.get(
+                "LYNX_FX_API_TERTIARY",
+                "https://latest.currency-api.pages.dev/v1/currencies/usd.json",
+            ),
+        ]
+        extractors: list[Callable[[Any], float | None]] = [
+            lambda d: _float_or_none((d.get("rates") or {}).get(target_upper)),
+            lambda d: _float_or_none((d.get("rates") or {}).get(target_upper)),
+            lambda d: _float_or_none((d.get("usd") or {}).get(target_lower)),
+        ]
+        for url, extract in zip(base_urls, extractors):
+            try:
+                response = requests.get(url, timeout=3)
+                response.raise_for_status()
+                data = response.json()
+                rate = extract(data)
+                if rate is not None and rate > 0:
+                    return rate
+            except Exception:
+                continue
+        return None

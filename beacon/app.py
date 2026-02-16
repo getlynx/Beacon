@@ -18,6 +18,32 @@ from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
 from beacon.services.system import SystemClient
 
+# Top 10 global currencies supported by all 3 FX APIs (Frankfurter, ExchangeRate-API, fawazahmed0)
+SUPPORTED_CURRENCIES: list[tuple[str, str]] = [
+    ("USD - US Dollar", "USD"),
+    ("EUR - Euro", "EUR"),
+    ("GBP - British Pound", "GBP"),
+    ("JPY - Japanese Yen", "JPY"),
+    ("CHF - Swiss Franc", "CHF"),
+    ("CAD - Canadian Dollar", "CAD"),
+    ("AUD - Australian Dollar", "AUD"),
+    ("BRL - Brazilian Real", "BRL"),
+    ("INR - Indian Rupee", "INR"),
+    ("MXN - Mexican Peso", "MXN"),
+]
+CURRENCY_SYMBOLS: dict[str, str] = {
+    "USD": "$",
+    "EUR": "€",
+    "GBP": "£",
+    "JPY": "¥",
+    "CHF": "Fr.",
+    "CAD": "C$",
+    "AUD": "A$",
+    "BRL": "R$",
+    "INR": "₹",
+    "MXN": "Mex$",
+}
+
 # High-contrast and vivid themes
 THEME_HIGH_CONTRAST_DARK = Theme(
     name="beacon-high-contrast-dark",
@@ -343,7 +369,7 @@ class PeerListPanel(VerticalScroll):
         self.accent_class = accent_class
         self.border_title = title
         self.border_title_align = ("left", "top")
-        self.border_subtitle = "Peers checked every 2 minutes"
+        self.border_subtitle = "Peers checked every ~2 minutes"
         self.border_subtitle_align = ("left", "bottom")
         self.add_class("card")
         self.add_class(accent_class)
@@ -388,6 +414,7 @@ class AddressListPanel(VerticalScroll):
         addr_list: list[dict],
         address_count: int | None = None,
         wallet_balance: object = None,
+        daemon_status: str = "unknown",
     ) -> None:
         if address_count is not None:
             self.border_title = f"💼 Addresses ({address_count})"
@@ -399,7 +426,12 @@ class AddressListPanel(VerticalScroll):
             self.border_subtitle = "Wallet Balance: -"
         self.border_subtitle_align = ("left", "bottom")
         if not addr_list:
-            self._content.update("No addresses found")
+            empty_msg = (
+                "Daemon starting or offline."
+                if daemon_status != "running"
+                else "No addresses found"
+            )
+            self._content.update(empty_msg)
             return
         lines: list[str] = []
         for e in addr_list:
@@ -535,19 +567,29 @@ class TimezoneCard(VerticalScroll):
             yield self._timezone_apply
 
 
-class LogsPanel(Static):
-    def __init__(self, title: str) -> None:
-        super().__init__()
-        self.title = title
-        self.lines: list[str] = []
+class CurrencyCard(VerticalScroll):
+    def __init__(
+        self,
+        title: str,
+        currency_select: SelectionList,
+        currency_apply: Button,
+        currency_status: Static,
+        **kwargs: object,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.border_title = title
+        self.add_class("card")
+        self._currency_select = currency_select
+        self._currency_apply = currency_apply
+        self._currency_status = currency_status
 
-    def update_lines(self, lines: list[str]) -> None:
-        self.lines = lines[-200:]
-        self.update(self.render())
-
-    def render(self) -> str:
-        content = "\n".join(self.lines) if self.lines else "No log output yet."
-        return f"[{self.title}]\n{content}"
+    def compose(self) -> ComposeResult:
+        yield self._currency_status
+        yield Static("", id="currency-status-spacer")
+        yield self._currency_select
+        yield Static("", id="currency-spacer")
+        with Container(id="currency-actions"):
+            yield self._currency_apply
 
 
 # All built-in themes + custom themes for cycle
@@ -743,7 +785,16 @@ class LynxTuiApp(App):
         layout: vertical;
         padding: 1 2;
     }
+    #settings-row {
+        layout: horizontal;
+        height: auto;
+    }
     #timezone-card {
+        width: 50;
+        height: 22;
+        margin-right: 2;
+    }
+    #currency-card {
         width: 50;
         height: 22;
     }
@@ -764,6 +815,26 @@ class LynxTuiApp(App):
         height: 1;
     }
     #timezone-status {
+        padding-left: 1;
+        height: auto;
+    }
+    #currency-select {
+        width: 1fr;
+        height: 12;
+    }
+    #currency-actions {
+        layout: horizontal;
+        height: auto;
+        align-horizontal: right;
+        padding-right: 1;
+    }
+    #currency-spacer {
+        height: 1;
+    }
+    #currency-status-spacer {
+        height: 1;
+    }
+    #currency-status {
         padding-left: 1;
         height: auto;
     }
@@ -819,7 +890,6 @@ class LynxTuiApp(App):
         self.block_stats_card = BlockStatsPanel(
             "🧱 Block Statistics", "sync", id="overview-block-stats"
         )
-        self.logs_panel = LogsPanel("Debug Log")
         self.status_bar = StatusBar()
         self.timezone_select = SelectionList(id="timezone-select")
         self.timezone_apply = Button("Apply", id="timezone-apply")
@@ -831,6 +901,17 @@ class LynxTuiApp(App):
             self.timezone_status,
             id="timezone-card",
         )
+        self.currency_select = SelectionList(id="currency-select")
+        self.currency_apply = Button("Apply", id="currency-apply")
+        self.currency_status = Static("", id="currency-status")
+        self.currency_card = CurrencyCard(
+            "Currency",
+            self.currency_select,
+            self.currency_apply,
+            self.currency_status,
+            id="currency-card",
+        )
+        self._currency = "USD"
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
         self._last_notified_block_height: int | None = None
@@ -978,11 +1059,11 @@ class LynxTuiApp(App):
                             with Container(id="overview-system-storage-column"):
                                 yield self.overview_system
                             yield self.send_card
-                with TabPane("Logs"):
-                    yield self.logs_panel
                 with TabPane("Settings"):
                     with Container(id="settings"):
-                        yield self.timezone_card
+                        with Container(id="settings-row"):
+                            yield self.timezone_card
+                            yield self.currency_card
         yield self.status_bar
         yield Footer()
 
@@ -1007,13 +1088,12 @@ class LynxTuiApp(App):
         
         self.set_timer(0.6, self.refresh_node_version)
         self.set_timer(0.1, self.refresh_data)
-        self.set_timer(0.2, self.refresh_logs)
         self.set_timer(0.3, self.refresh_block_stats)
         self.set_timer(0.4, self.refresh_timezone_list)
+        self.set_timer(0.45, self.refresh_currency_list)
         self.set_timer(0.5, self.refresh_timezone)
         self.set_timer(0.8, lambda: self.set_interval(3600, self.refresh_node_version))
         self.set_timer(1.0, lambda: self.set_interval(5, self.auto_refresh_data))
-        self.set_timer(1.2, lambda: self.set_interval(4, self.refresh_logs))
         self.set_timer(1.5, lambda: self.set_interval(60, self.refresh_block_stats))
         self.set_timer(2.0, self.refresh_storage_capacity)
         self.set_timer(2.0, lambda: self.set_interval(900, self.refresh_storage_capacity))
@@ -1050,6 +1130,17 @@ class LynxTuiApp(App):
         self.timezone_select.clear_options()
         options = [(tz, tz, tz == current) for tz in timezones]
         self.timezone_select.add_options(options)
+
+    def refresh_currency_list(self) -> None:
+        """Populate currency selector with supported currency options."""
+        self.currency_select.clear_options()
+        # Tuple is (prompt, value) - .selected returns the value
+        options = [
+            (prompt, code, self._currency == code)
+            for prompt, code in SUPPORTED_CURRENCIES
+        ]
+        self.currency_select.add_options(options)
+        self.currency_status.update(f"Display currency: {self._currency}")
 
     def action_toggle_send_card(self) -> None:
         """Toggle Send card visibility (bound to x key)."""
@@ -1109,6 +1200,19 @@ class LynxTuiApp(App):
         if event.button.id == "send-button":
             await self._handle_send()
             return
+        if event.button.id == "currency-apply":
+            selected = self.currency_select.selected
+            if not selected:
+                self.currency_status.update("Error: select a currency.")
+                return
+            currency = str(selected[0]).strip()
+            supported = {code for _, code in SUPPORTED_CURRENCIES}
+            if currency in supported:
+                self._currency = currency
+                self.currency_status.update(f"Display currency: {currency}")
+                self.refresh_currency_list()
+                await self.refresh_data()
+            return
         if event.button.id != "timezone-apply":
             return
         selected = self.timezone_select.selected
@@ -1128,7 +1232,6 @@ class LynxTuiApp(App):
             time.tzset()
             # Refresh displays to show new timezone
             await self.refresh_timezone()
-            await self.refresh_logs()
 
     async def action_refresh_all(self) -> None:
         self.header.set_indicator("blue")
@@ -1136,7 +1239,6 @@ class LynxTuiApp(App):
         await asyncio.gather(
             self.refresh_node_version(),
             self.refresh_data(),
-            self.refresh_logs(),
             self.refresh_timezone_list(),
             self.refresh_timezone(),
             self.refresh_storage_capacity(),
@@ -1196,13 +1298,18 @@ class LynxTuiApp(App):
             self.node_status_card.refresh()
 
     def on_selection_list_selection_toggled(self, event: SelectionList.SelectionToggled) -> None:
-        if event.selection_list.id != "timezone-select":
-            return
-        if len(event.selection_list.selected) <= 1:
-            return
-        selected_value = event.selection.value
-        event.selection_list.deselect_all()
-        event.selection_list.select(selected_value)
+        if event.selection_list.id == "timezone-select":
+            if len(event.selection_list.selected) <= 1:
+                return
+            selected_value = event.selection.value
+            event.selection_list.deselect_all()
+            event.selection_list.select(selected_value)
+        elif event.selection_list.id == "currency-select":
+            if len(event.selection_list.selected) <= 1:
+                return
+            selected_value = event.selection.value
+            event.selection_list.deselect_all()
+            event.selection_list.select(selected_value)
 
     def _schedule_update(self, delay: float, callback: callable) -> None:
         self.set_timer(delay, callback)
@@ -1218,6 +1325,16 @@ class LynxTuiApp(App):
         block_height_cli = await asyncio.get_event_loop().run_in_executor(
             None, self.rpc.fetch_block_count_cli
         )
+
+        conversion_rate = 1.0
+        use_converted = False
+        if self._currency != "USD":
+            rate = await asyncio.get_event_loop().run_in_executor(
+                None, self.pricing.fetch_usd_to_currency_rate, self._currency
+            )
+            if rate is not None:
+                conversion_rate = rate
+                use_converted = True
 
         blockchain_info = data.get("blockchain_info")
         blockchain_info = blockchain_info if isinstance(blockchain_info, dict) else {}
@@ -1352,7 +1469,12 @@ class LynxTuiApp(App):
         peer_rows.sort(key=lambda row: row[0], reverse=True)
         peer_lines = [line for _, line in peer_rows]
         if not peer_lines:
-            peer_lines = ["No peers connected."]
+            daemon_status = data.get("daemon_status", "unknown")
+            peer_lines = (
+                ["Daemon starting or offline."]
+                if daemon_status != "running"
+                else ["No peers connected."]
+            )
         peer_count = len(peer_info)
         
         # Get all addresses - merge data from both sources
@@ -1477,36 +1599,52 @@ class LynxTuiApp(App):
         atomicdex = price_data.get("atomicdex")
         komodo = price_data.get("komodo")
         frei = price_data.get("frei")
-        
-        price_str = f"${price_numeric:.8f}" if price_numeric is not None else "-"
+
+        symbol = CURRENCY_SYMBOLS.get(self._currency, "$") if use_converted else "$"
+        rate = conversion_rate
+
+        def _convert(val: float | None) -> float | None:
+            if val is None:
+                return None
+            return val * rate
+
+        def _fmt(val: float | None) -> str:
+            if val is not None and val > 0:
+                return f"{symbol}{val:.8f}"
+            return "-"
+
+        def _fmt_2dp(val: float | None) -> str:
+            if val is not None and val > 0:
+                return f"{symbol}{val:.2f}"
+            return "-"
+
+        price_display = _convert(price_numeric)
+        price_str = _fmt(price_display) if price_display is not None else "-"
         change_str = f"{change_24h:+.2f}%" if change_24h is not None else "-"
-        
-        if isinstance(wallet_balance, (int, float)) and price_numeric is not None:
-            balance_value = wallet_balance * price_numeric
-        
-        def _fmt_usd(val: float | None) -> str:
-            return f"${val:.8f}" if val is not None and val > 0 else "-"
-        
+
+        if isinstance(wallet_balance, (int, float)) and price_display is not None:
+            balance_value = wallet_balance * price_display
+
         pricing_lines = [
             f"Price per Coin:  {price_str}",
             f"24h Change:      {change_str}",
             f"Balance:         {wallet_balance if isinstance(wallet_balance, (int, float)) else '-'}",
-            f"Value:           ${balance_value:.2f}" if balance_value > 0 else "Value:           -",
-            f"Atomic DEX:      {_fmt_usd(atomicdex)}",
-            f"Komodo Swap:     {_fmt_usd(komodo)}",
-            f"FreiExchange:    {_fmt_usd(frei)}",
+            f"Value:           {_fmt_2dp(balance_value)}" if balance_value > 0 else "Value:           -",
+            f"Atomic DEX:      {_fmt(_convert(atomicdex))}",
+            f"Komodo Swap:     {_fmt(_convert(komodo))}",
+            f"FreiExchange:    {_fmt(_convert(frei))}",
         ]
-        
+
         # Calculate value grid for different denominations
         value_lines = []
-        if price_numeric is not None and price_numeric > 0:
+        if price_display is not None and price_display > 0:
             denominations = [(1, "1"), (10, "10"), (100, "100"), (1000, "1K"), (10000, "10K"), (100000, "100K"), (1000000, "1M")]
             for amount, label in denominations:
-                value = amount * price_numeric
+                value = amount * price_display
                 if value >= 1000:
-                    value_lines.append(f"{label:>6} coins  ${value:>10,.2f}")
+                    value_lines.append(f"{label:>6} coins  {symbol}{value:>10,.2f}")
                 else:
-                    value_lines.append(f"{label:>6} coins  ${value:>10.2f}")
+                    value_lines.append(f"{label:>6} coins  {symbol}{value:>10.2f}")
         else:
             value_lines = ["Price data unavailable"]
 
@@ -1532,6 +1670,7 @@ class LynxTuiApp(App):
                 addr_list,
                 address_count=address_count,
                 wallet_balance=data.get("wallet_balance"),
+                daemon_status=data.get("daemon_status", "unknown"),
             ),
         )
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
@@ -1583,13 +1722,13 @@ class LynxTuiApp(App):
                                 n_tx_raw = block.get("nTx") or (len(tx_list) if isinstance(tx_list, list) else None)
                                 n_tx = max(0, (n_tx_raw or 0) - 2) if isinstance(n_tx_raw, (int, float)) else "?"
                                 self.notify(
-                                    f"Height {h} | {hsh[:12]}... | {n_tx} tx",
+                                    f"Height {h} | {hsh[:4]} | {n_tx} tx",
                                     title="New block",
                                     timeout=15,
                                 )
                             else:
                                 self.notify(
-                                    f"Height {bh} | {best_hash[:12]}...",
+                                    f"Height {bh} | {best_hash[:4]}",
                                     title="New block",
                                     timeout=15,
                                 )
@@ -1611,10 +1750,6 @@ class LynxTuiApp(App):
 
         self._schedule_update(0.5, update_status)
 
-    async def refresh_logs(self) -> None:
-        lines = await asyncio.get_event_loop().run_in_executor(None, self.logs.tail_lines)
-        self.logs_panel.update_lines(lines)
-    
     @staticmethod
     def _strip_crlf(s: str) -> str:
         """Remove carriage return and line feed characters."""
@@ -1655,7 +1790,7 @@ class LynxTuiApp(App):
             None, self._fetch_block_stats_with_std_dev
         )
         lines = []
-        for period, total_seconds, block_info in periods:
+        for i, (period, total_seconds, block_info) in enumerate(periods):
             minutes, secs = divmod(total_seconds, 60)
             if minutes > 0 and secs > 0:
                 formatted_time = f"{minutes} min {secs} sec"
@@ -1663,8 +1798,9 @@ class LynxTuiApp(App):
                 formatted_time = f"{minutes} min"
             else:
                 formatted_time = f"{secs} sec"
-            pct = avg_pcts.get(period)
-            pct_col = f"{pct:+.3f}%" if pct is not None else "-"
+            # Skip deviation for first row (last hour) - can be misleading
+            pct = avg_pcts.get(period) if i > 0 else None
+            pct_col = f"{pct:+.3f}%" if pct is not None else ""
             period_width = 16
             time_width = 20
             block_width = 18
