@@ -273,6 +273,10 @@ class RpcClient:
         version = first_line.split()[-1] if first_line.split() else None
         return {"name": name, "version_line": first_line, "version": version}
 
+    def getblockhash(self, height: int) -> str | None:
+        """Return block hash at given height."""
+        return self._safe_call("getblockhash", [height])
+
     def getblock(self, block_hash: str, verbosity: int = 1) -> Dict[str, Any] | None:
         """Fetch block details. Verbosity 1 returns hash, height, tx array."""
         try:

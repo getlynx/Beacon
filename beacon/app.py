@@ -10,7 +10,7 @@ from textual import events
 from textual.containers import Container, VerticalScroll
 from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
-from textual.widgets import Button, Footer, Input, SelectionList, Static, TabbedContent, TabPane
+from textual.widgets import Button, Footer, Input, SelectionList, Sparkline, Static, TabbedContent, TabPane
 from rich.console import Group
 from rich.text import Text
 
@@ -312,7 +312,7 @@ class PeerMapCard(Static):
     def __init__(self, **kwargs: object) -> None:
         super().__init__(markup=False, **kwargs)
         self.border_title = "🌍 Peer Map"
-        self.border_subtitle = ""
+        self.border_subtitle = "(No Coal Required)"
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
@@ -361,9 +361,9 @@ class PeerMapCard(Static):
 
     def _update_subtitle(self) -> None:
         if self._total_count > 0:
-            self.border_subtitle = f"{self._mapped_count} of {self._total_count} mapped"
+            self.border_subtitle = f"{self._mapped_count} of {self._total_count} mapped (No Coal Required)"
         else:
-            self.border_subtitle = ""
+            self.border_subtitle = "(No Coal Required)"
 
     def _get_map_dimensions(self) -> tuple[int, int]:
         """Get cols, rows from widget size. Uses inner size minus border/padding."""
@@ -397,6 +397,102 @@ class PeerMapCard(Static):
             blink_visible=self._blink_visible,
         )
         self.update(content)
+
+
+def _extract_pos_difficulty(difficulty: object) -> float:
+    """Extract proof-of-stake difficulty from block difficulty (number, string, or dict)."""
+    if difficulty is None:
+        return 0.0
+    if isinstance(difficulty, (int, float)):
+        return float(difficulty)
+    if isinstance(difficulty, str):
+        try:
+            return float(difficulty)
+        except (TypeError, ValueError):
+            return 0.0
+    if isinstance(difficulty, dict):
+        val = (
+            difficulty.get("proof-of-stake")
+            or difficulty.get("pos")
+            or difficulty.get("stake")
+            or difficulty.get("pos_difficulty")
+        )
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                return 0.0
+    return 0.0
+
+
+def _format_difficulty_short(value: float, width: int = 5) -> str:
+    """Format difficulty for compact display (e.g. 1.2M, 456K, 0.001)."""
+    if value <= 0 or value != value:  # NaN
+        return "-".rjust(width)
+    if value >= 1e9:
+        s = f"{value / 1e9:.2f}B"
+    elif value >= 1e6:
+        s = f"{value / 1e6:.1f}M"
+    elif value >= 1e3:
+        s = f"{value / 1e3:.1f}K"
+    elif value >= 1:
+        s = f"{value:.2f}"[:6]
+    elif value >= 0.001:
+        s = f"{value:.3f}"
+    elif value >= 1e-6:
+        s = f"{value:.0e}"
+    else:
+        s = "~0"
+    return s[:width].rjust(width)
+
+
+class DifficultyChartPanel(Container):
+    """Card with Sparkline showing PoS difficulty for last 100 blocks."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = "🔗 Proof of Stake Difficulty"
+        self.border_subtitle = "0 of 100 latest blocks (newest on left)"
+        self.border_title_align = ("left", "top")
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class("activity")
+        self._difficulty_data: list[float] = []
+        self._sparkline: Sparkline | None = None
+
+    def compose(self) -> ComposeResult:
+        self._sparkline = Sparkline(
+            self._difficulty_data,
+            summary_function=max,
+            id="difficulty-sparkline",
+        )
+        yield self._sparkline
+
+    def update_difficulty(self, value: float, prepend: bool = False) -> None:
+        """Add a difficulty value. prepend=True for new blocks, False for backfill.
+        Values are normalized to 0-1 range for display so the chart handles any magnitude."""
+        if prepend:
+            self._difficulty_data.insert(0, value)
+            if len(self._difficulty_data) > 100:
+                self._difficulty_data.pop()
+        else:
+            self._difficulty_data.append(value)
+            if len(self._difficulty_data) > 100:
+                self._difficulty_data = self._difficulty_data[-100:]
+        if self._sparkline is not None:
+            normalized = self._normalize_for_display(self._difficulty_data)
+            self._sparkline.data = normalized
+        self.border_subtitle = f"{len(self._difficulty_data)} of 100 latest blocks (newest on left)"
+
+    def _normalize_for_display(self, data: list[float]) -> list[float]:
+        """Normalize values to 0-1 range so chart renders regardless of magnitude."""
+        if not data:
+            return []
+        min_val = min(data)
+        max_val = max(data)
+        if max_val <= min_val:
+            return [0.5] * len(data)
+        return [(v - min_val) / (max_val - min_val) for v in data]
 
 
 class BlockStatsPanel(VerticalScroll):
@@ -631,6 +727,18 @@ class AddressListPanel(VerticalScroll):
         self._content.update(Group(*texts))
 
 
+# Network Activity column widths: height=7, hash=4, delta=7, empty_marker=13, diff=6
+_NETWORK_HEIGHT_W = 7
+_NETWORK_HASH_W = 4
+_NETWORK_DELTA_W = 7
+_NETWORK_EMPTY_W = 13
+_NETWORK_DIFF_W = 6
+_NETWORK_FIXED_TOTAL = (
+    _NETWORK_HEIGHT_W + _NETWORK_HASH_W + _NETWORK_DELTA_W
+    + _NETWORK_EMPTY_W + _NETWORK_DIFF_W + 10
+)  # +10 for 5 gaps of 2 spaces
+
+
 class NetworkActivityPanel(VerticalScroll):
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -641,17 +749,64 @@ class NetworkActivityPanel(VerticalScroll):
         self.add_class(accent_class)
         self._content = Static("... loading", classes="network-row-text")
         self._heights: list[int] = []
+        self._raw_entries: list[tuple[int, str, str, str, str]] = []
+        self._difficulties: list[float] | None = None
 
     def compose(self) -> ComposeResult:
         yield self._content
 
+    def on_resize(self) -> None:
+        self._render_content()
+
+    def _render_content(self) -> None:
+        if not self._raw_entries:
+            return
+        try:
+            # Use visible viewport width; subtract scrollbar, padding, border
+            width = max(48, self.size.width - 6)
+        except Exception:
+            width = 60
+        time_width = max(8, width - _NETWORK_FIXED_TOTAL)
+        lines = []
+        for i, (height, hash_short, time_display, delta_display, empty_marker) in enumerate(
+            self._raw_entries
+        ):
+            if self._difficulties is not None and i < len(self._difficulties):
+                diff_str = _format_difficulty_short(
+                    self._difficulties[i], _NETWORK_DIFF_W
+                )
+            else:
+                diff_str = "-".rjust(_NETWORK_DIFF_W)
+            time_trunc = (
+                time_display[-time_width:] if len(time_display) > time_width
+                else time_display
+            )
+            left = (
+                f"{height:>{_NETWORK_HEIGHT_W}}  "
+                f"{hash_short:<{_NETWORK_HASH_W}}  "
+                f"{time_trunc:<{time_width}}  "
+                f"{delta_display:<{_NETWORK_DELTA_W}}  "
+                f"{empty_marker:<{_NETWORK_EMPTY_W}}"
+            )
+            pad = max(0, width - len(left) - _NETWORK_DIFF_W)
+            line = left + " " * pad + diff_str
+            lines.append(line)
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
+
     def update_entries(
         self,
-        entries: list[tuple[int, str]],
+        entries: list[tuple[int, str, str, str, str]],
         count: int | None = None,
         time_since_latest: str | None = None,
+        difficulties: list[float] | None = None,
     ) -> None:
-        self._heights = [height for height, _ in entries]
+        self._heights = [e[0] for e in entries]
+        self._raw_entries = entries
+        self._difficulties = difficulties
         if count is not None:
             self.border_title = f"{self.title} ({count})"
         else:
@@ -664,12 +819,7 @@ class NetworkActivityPanel(VerticalScroll):
         if not entries:
             self._content.update("... loading")
             return
-        lines = [f"{height:>7}  {line_display}" for height, line_display in entries]
-        texts = [
-            Text(line, style="dim" if i % 2 == 1 else "")
-            for i, line in enumerate(lines)
-        ]
-        self._content.update(Group(*texts))
+        self._render_content()
 
 
 class SendCard(VerticalScroll):
@@ -873,6 +1023,20 @@ class LynxTuiApp(App):
         min-height: 6;
         max-height: 9;
     }
+    #difficulty-chart {
+        height: 1fr;
+        padding: 1;
+    }
+    #difficulty-sparkline {
+        width: 1fr;
+        height: 5;
+    }
+    #difficulty-sparkline > .sparkline--max-color {
+        color: $accent-lighten-2;
+    }
+    #difficulty-sparkline > .sparkline--min-color {
+        color: $accent-darken-2;
+    }
     #overview-system,
     #overview-daemon-status,
     #overview-mempool,
@@ -906,6 +1070,7 @@ class LynxTuiApp(App):
     #overview-peers {
         min-height: 22;
         height: 1fr;
+        overflow-x: hidden;
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
         overflow-y: scroll;
@@ -1134,7 +1299,9 @@ class LynxTuiApp(App):
     }
     .network-row-text {
         width: 1fr;
+        min-width: 0;
         text-wrap: nowrap;
+        overflow: hidden;
     }
     """
 
@@ -1160,10 +1327,13 @@ class LynxTuiApp(App):
         self.overview_addresses = AddressListPanel(
             "💼 Addresses", "wallet", id="overview-addresses"
         )
+        self.difficulty_chart = DifficultyChartPanel(id="difficulty-chart")
         self.send_card = SendCard(id="send-card")
         self.send_card.display = False  # Hidden by default, press x to show
         self.sweep_card = SweepCard(id="sweep-card")
         self.sweep_card.display = False  # Hidden by default, press w to show
+        self._difficulty_backfill_index = 0
+        self._difficulty_backfill_timer = None
         self.overview_mempool = MemPoolPanel("📋 Memory Pool", "sync", id="overview-mempool")
         self.overview_system = CardPanel("💻 System Utilization", "node", alternating_rows=True, id="overview-system")
         self.overview_daemon_status = CardPanel("🟢 Daemon Status", "node", alternating_rows=True, id="overview-daemon-status")
@@ -1343,6 +1513,7 @@ class LynxTuiApp(App):
                             yield self.node_status_card
                             yield self.block_stats_card
                             with Container(id="send-sweep-slot"):
+                                yield self.difficulty_chart
                                 yield self.send_card
                                 yield self.sweep_card
                             yield self.overview_pricing
@@ -1387,6 +1558,7 @@ class LynxTuiApp(App):
         self.set_timer(0.5, self.refresh_timezone)
         self.set_timer(0.8, lambda: self.set_interval(3600, self.refresh_node_version))
         self.set_timer(1.0, lambda: self.set_interval(5, self.auto_refresh_data))
+        self.set_timer(1.5, lambda: self.set_interval(1, self._difficulty_backfill_tick))
         self.set_timer(1.5, lambda: self.set_interval(60, self.refresh_block_stats))
         self.set_timer(2.0, self.refresh_storage_capacity)
         self.set_timer(2.0, lambda: self.set_interval(900, self.refresh_storage_capacity))
@@ -1395,6 +1567,49 @@ class LynxTuiApp(App):
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
         return f"...please wait while loading the {name} Beacon"
+
+    def _fetch_one_difficulty_for_backfill(self) -> float | None:
+        """Fetch one block's PoS difficulty (runs in executor). Returns value or None."""
+        try:
+            info = self.rpc._safe_call("getblockchaininfo")
+            if not isinstance(info, dict):
+                return None
+            tip = info.get("blocks")
+            if tip is None:
+                return None
+            try:
+                tip = int(tip)
+            except (TypeError, ValueError):
+                return None
+            height = tip - self._difficulty_backfill_index
+            if height < 0:
+                return None
+            block_hash = self.rpc.getblockhash(height)
+            if not block_hash:
+                return None
+            block = self.rpc.getblock(block_hash, 1)
+            if not block or not isinstance(block, dict):
+                return None
+            return _extract_pos_difficulty(block.get("difficulty"))
+        except Exception:
+            return None
+
+    def _difficulty_backfill_tick(self) -> None:
+        """Fetch one block's PoS difficulty every 1s until we have 100."""
+        if self._difficulty_backfill_index >= 100:
+            return
+        async def _do() -> None:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self._fetch_one_difficulty_for_backfill
+            )
+            if result is not None:
+                self._apply_difficulty_backfill(result)
+        asyncio.ensure_future(_do())
+
+    def _apply_difficulty_backfill(self, value: float) -> None:
+        """Apply a backfilled difficulty value (must run on UI thread)."""
+        self.difficulty_chart.update_difficulty(value, prepend=False)
+        self._difficulty_backfill_index += 1
 
     async def refresh_node_version(self) -> None:
         node_version = await asyncio.get_event_loop().run_in_executor(None, self.rpc.fetch_node_version)
@@ -1440,16 +1655,18 @@ class LynxTuiApp(App):
         self.currency_status.update(f"Display currency: {self._currency}")
 
     def action_toggle_send_card(self) -> None:
-        """Toggle Send card visibility (bound to x key). Hides Sweep if active."""
+        """Toggle Send card visibility (bound to x key). Hides Sweep and Difficulty chart if active."""
         if self.sweep_card.display:
             self.sweep_card.display = False
         self.send_card.display = not self.send_card.display
+        self.difficulty_chart.display = not (self.send_card.display or self.sweep_card.display)
 
     def action_toggle_sweep_card(self) -> None:
-        """Toggle Sweep card visibility (bound to w key). Hides Send if active."""
+        """Toggle Sweep card visibility (bound to w key). Hides Send and Difficulty chart if active."""
         if self.send_card.display:
             self.send_card.display = False
         self.sweep_card.display = not self.sweep_card.display
+        self.difficulty_chart.display = not (self.send_card.display or self.sweep_card.display)
 
     def action_toggle_map_center(self) -> None:
         """Toggle map view between default (Americas west) and centered on node (m key)."""
@@ -1794,7 +2011,7 @@ class LynxTuiApp(App):
         wallet_mine = balances.get("mine")
         wallet_mine = wallet_mine if isinstance(wallet_mine, dict) else {}
 
-        network_entries, latest_block_time = self.logs.get_update_tip_entries(50)
+        network_entries, latest_block_time, tz_name = self.logs.get_update_tip_entries(50)
         def fit_column(value: str, width: int) -> str:
             if len(value) <= width:
                 return value.ljust(width)
@@ -2093,10 +2310,16 @@ class LynxTuiApp(App):
             total_secs = max(0, int(elapsed.total_seconds()))
             mins, secs = divmod(total_secs, 60)
             time_since = f"{mins}m {secs}s since latest block"
+        if tz_name:
+            time_since = f"{time_since} ({tz_name})"
+        difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
         self._schedule_update(
             0.1,
             lambda: self.overview_network.update_entries(
-                network_entries, count=50, time_since_latest=time_since
+                network_entries,
+                count=50,
+                time_since_latest=time_since,
+                difficulties=difficulty_data if difficulty_data else None,
             ),
         )
         self._schedule_update(
@@ -2147,6 +2370,7 @@ class LynxTuiApp(App):
         self._schedule_update(0.5, lambda: self.overview_value.update_lines(value_lines))
         self._schedule_update(0.6, self.refresh_storage_capacity)
 
+
         system_lines = [
             f"RPC port: {data['rpc_port']}",
             f"RPC security: {data['rpc_security']}",
@@ -2186,6 +2410,8 @@ class LynxTuiApp(App):
                                     title="New block",
                                     timeout=15,
                                 )
+                                pos_diff = _extract_pos_difficulty(block.get("difficulty"))
+                                self.difficulty_chart.update_difficulty(pos_diff, prepend=True)
                             else:
                                 self.notify(
                                     f"Height {bh} | {best_hash[:4]}",

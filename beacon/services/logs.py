@@ -26,13 +26,18 @@ class LogTailer:
 
     def get_update_tip_entries(
         self, limit: int = 15
-    ) -> tuple[list[tuple[int, str]], datetime | None]:
+    ) -> tuple[
+        list[tuple[int, str, str, str, str]],
+        datetime | None,
+        str,
+    ]:
+        """Return (entries, latest_time, tz_name). Time display excludes timezone (shown in card subtitle)."""
         if not self.log_path.exists():
-            return ([(0, "debug.log not found")], None)
+            return ([(0, "-", "debug.log not found", "-", "-")], None, "")
         try:
             lines = self.log_path.read_text(errors="ignore").splitlines()
         except Exception:
-            return ([(0, "Unable to read debug.log")], None)
+            return ([(0, "-", "Unable to read debug.log", "-", "-")], None, "")
 
         entries: list[tuple[int, str, str, datetime | None, int | None]] = []
         seen: set[int] = set()
@@ -56,7 +61,7 @@ class LogTailer:
             try:
                 parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
                 local_time = parsed.astimezone()
-                time_display = local_time.strftime("%Y-%m-%d %I:%M:%S %p %Z")
+                time_display = local_time.strftime("%Y-%m-%d %I:%M:%S %p")
                 parsed_time = local_time
             except Exception:
                 if len(time_display) > 19:
@@ -72,11 +77,14 @@ class LogTailer:
                 break
 
         if not entries:
-            return ([(0, "No UpdateTip entries.")], None)
+            return ([(0, "-", "No UpdateTip entries.", "-", "-")], None, "")
 
         entries.sort(key=lambda item: item[0], reverse=True)
         latest_time = entries[0][3] if entries else None
-        result_lines: list[tuple[int, str]] = []
+        tz_name = ""
+        if latest_time and latest_time.tzinfo:
+            tz_name = latest_time.strftime("%Z") or str(latest_time.tzinfo)
+        result_lines: list[tuple[int, str, str, str, str]] = []
         max_items = min(limit, len(entries))
         for index in range(max_items):
             height, hash_short, time_display, parsed_time, tx_count = entries[index]
@@ -102,12 +110,8 @@ class LogTailer:
                         if diff < 0:
                             diff = 0
                         empty_marker = f"{diff} tx"
-            line_display = (
-                f"{hash_short:<4}  {time_display:<26}  "
-                f"{delta_display:<7}  {empty_marker:<15}"
-            )
-            result_lines.append((height, line_display))
-        return (result_lines, latest_time)
+            result_lines.append((height, hash_short, time_display, delta_display, empty_marker))
+        return (result_lines, latest_time, tz_name)
 
     def get_latest_block_statistics(self) -> str:
         """Get the most recent Block Statistics line from debug.log."""
