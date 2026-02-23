@@ -295,6 +295,11 @@ class RpcClient:
             pass
         return None
 
+    def get_daemon_status(self) -> str:
+        """Return 'running' if daemon responds, else 'unknown'."""
+        blockchain = self._safe_call("getblockchaininfo") or {}
+        return "running" if blockchain else "unknown"
+
     def fetch_capacity(self) -> Dict[str, Any] | None:
         """Fetch storage capacity via lynx-cli capacity (hidden RPC). Returns JSON with values in KB."""
         datadir = self.get_datadir()

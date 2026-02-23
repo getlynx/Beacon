@@ -32,7 +32,8 @@ LYNX_REPO="getlynx/Lynx"
  install_packages() {
    if [ "$OS_FAMILY" = "debian" ]; then
      apt-get update -y
-    apt-get install -y python3 python3-venv python3-pip curl htop iptables unzip
+     PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.11")
+     apt-get install -y python3 python3-venv python3-pip "python${PYVER}-venv" "python${PYVER}-full" curl htop iptables unzip
    elif [ "$OS_FAMILY" = "redhat" ]; then
      if command -v dnf >/dev/null 2>&1; then
       dnf install -y python3 python3-pip python3-virtualenv curl htop iptables unzip

@@ -3,6 +3,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual import events
@@ -13,6 +14,13 @@ from textual.widgets import Button, Footer, Input, SelectionList, Static, Tabbed
 from rich.console import Group
 from rich.text import Text
 
+from beacon.services.geolocation import GeoCache
+from beacon.services.map_renderer import (
+    BLINK_DIM,
+    generate_map,
+    MARKER as MAP_MARKER,
+    PEER_COLORS,
+)
 from beacon.services.logs import LogTailer
 from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
@@ -132,6 +140,21 @@ class CustomHeader(Static):
         time_str = now.strftime("%A, %B %d, %Y  %I:%M:%S %p")
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
+        # Node status on left (from status_bar)
+        node_status = "unknown"
+        if hasattr(self.app, 'status_bar') and self.app.status_bar:
+            node_status = self.app.status_bar.node_status
+        if node_status == "running":
+            status_emoji = "🟢"
+            display = "Online"
+        elif node_status == "refreshing":
+            status_emoji = "⏳"
+            display = "Checking..."
+        else:
+            status_emoji = "🔴"
+            display = "Daemon starting or offline"
+        node_status_str = f"{status_emoji} Node Status: {display} "
+        
         # Select emoji based on state
         indicator_emoji = {
             "green": "🟢",
@@ -139,35 +162,46 @@ class CustomHeader(Static):
             "blue": "🔵"
         }.get(self.indicator_state, "🟢")
         
-        # Center title and right-align time with indicator
+        # Left: node status, center: title, right: time + indicator
+        # Emoji needs 2 display cells; reserve extra column so it doesn't clip at edge
         try:
             width = self.size.width
             time_with_indicator = f"{time_str} {indicator_emoji}"
             time_len = len(time_with_indicator)
             title_len = len(title)
+            left_len = len(node_status_str)
             
-            # Calculate centered position for title
-            title_start = (width - title_len) // 2
+            # Truncate node status if needed to avoid overlap with time
+            if left_len + time_len > width:
+                max_left = max(0, width - time_len - 2)
+                node_status_str = node_status_str[:max_left] if max_left > 0 else ""
+            left_len = len(node_status_str)
             
             # Build the display string
             line = [' '] * width
             
-            # Place centered title
-            for i, char in enumerate(title):
-                pos = title_start + i
-                if 0 <= pos < width:
-                    line[pos] = char
-            
-            # Place right-aligned time with indicator
-            time_start = width - time_len - 1
+            # Place right-aligned time with indicator; offset so emoji (2-cell) doesn't clip
+            time_start = width - time_len - 2
             for i, char in enumerate(time_with_indicator):
                 pos = time_start + i
                 if 0 <= pos < width:
                     line[pos] = char
             
+            # Place node status on left
+            for i, char in enumerate(node_status_str):
+                if 0 <= i < width:
+                    line[i] = char
+            
+            # Place centered title (do not overwrite time region)
+            title_start = (width - title_len) // 2
+            for i, char in enumerate(title):
+                pos = title_start + i
+                if 0 <= pos < time_start:
+                    line[pos] = char
+            
             self.update(''.join(line))
-        except:
-            self.update(f" {title}  {time_str} {indicator_emoji}")
+        except Exception:
+            self.update(f"{node_status_str}{title}  {time_str} {indicator_emoji}")
 
 
 class StatusBar(Static):
@@ -176,18 +210,13 @@ class StatusBar(Static):
         self.node_status = "unknown"
         self.block_height = "-"
         self.staking = "unknown"
-        self.sync_monitor = "unknown"
         self.theme_name = "beacon-high-contrast-dark"
         self.theme_visible = False
 
     def render(self) -> str:
-        base = (
-            f"Node: {self.node_status} | "
-            f"SyncMon: {self.sync_monitor}"
-        )
         if self.theme_visible:
-            return f"{base} | Theme: {self.theme_name}"
-        return base
+            return f"Theme: {self.theme_name}"
+        return ""
 
 
 class KeyValuePanel(Static):
@@ -271,6 +300,103 @@ class StorageCapabilityPanel(VerticalScroll):
             for i, ln in enumerate(formatted)
         ]
         self._content.update(Group(*texts))
+
+
+class PeerMapCard(Static):
+    """World map card with peer location markers. Uses Shapely + Natural Earth for dynamic map."""
+
+    # Fallback dimensions when size not yet known
+    DEFAULT_COLS = 80
+    DEFAULT_ROWS = 24
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(markup=False, **kwargs)
+        self.border_title = "🌍 Peer Map"
+        self.border_subtitle = ""
+        self.border_title_align = ("left", "top")
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class("network")
+        self._peer_locations: list[tuple[float, float]] = []
+        self._mapped_count = 0
+        self._total_count = 0
+        self._center_lon: float | None = None
+        self._blink_indices: set[int] = set()
+        self._blink_visible = True
+        self._blink_count = 0
+        self._blink_timer: object = None
+
+    def on_mount(self) -> None:
+        # Defer initial render until layout has run and we have stable dimensions
+        self.app.call_later(lambda _: self._render_map(), 0.1)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._render_map()
+
+    def update_peers(
+        self,
+        locations: list[tuple[float, float]],
+        total_count: int | None = None,
+        center_lon: float | None = None,
+        blink_indices: set[int] | None = None,
+    ) -> None:
+        """Update peer locations and redraw. locations: list of (lat, lon) with known geo.
+        center_lon: longitude to center on, or None for default view (Americas west).
+        """
+        self._peer_locations = locations
+        self._mapped_count = len(locations)
+        self._total_count = total_count if total_count is not None else self._mapped_count
+        self._center_lon = center_lon
+        self._update_subtitle()
+        if blink_indices:
+            self._blink_indices = blink_indices
+            self._blink_visible = True
+            self._blink_count = 0
+            if self._blink_timer:
+                self._blink_timer.stop()
+            self._blink_timer = self.app.set_interval(0.2, self._blink_tick)
+        else:
+            self._blink_indices = set()
+            self._render_map()
+
+    def _update_subtitle(self) -> None:
+        if self._total_count > 0:
+            self.border_subtitle = f"{self._mapped_count} of {self._total_count} mapped"
+        else:
+            self.border_subtitle = ""
+
+    def _get_map_dimensions(self) -> tuple[int, int]:
+        """Get cols, rows from widget size. Uses inner size minus border/padding."""
+        w = self.size.width
+        h = self.size.height
+        if w > 0 and h > 0:
+            cols = max(10, w - 2)
+            rows = max(5, h - 2)
+            return (cols, rows)
+        return (self.DEFAULT_COLS, self.DEFAULT_ROWS)
+
+    def _blink_tick(self) -> None:
+        self._blink_visible = not self._blink_visible
+        self._blink_count += 1
+        self._render_map()
+        if self._blink_count >= 18:
+            if self._blink_timer:
+                self._blink_timer.stop()
+                self._blink_timer = None
+            self._blink_indices = set()
+            self._blink_visible = True
+
+    def _render_map(self) -> None:
+        cols, rows = self._get_map_dimensions()
+        content = generate_map(
+            cols,
+            rows,
+            markers=self._peer_locations,
+            center_lon=self._center_lon,
+            blink_indices=self._blink_indices or None,
+            blink_visible=self._blink_visible,
+        )
+        self.update(content)
 
 
 class BlockStatsPanel(VerticalScroll):
@@ -374,11 +500,21 @@ class PeerListPanel(VerticalScroll):
         self.add_class("card")
         self.add_class(accent_class)
         self._content = Static("... loading", classes="network-row-text")
+        self._lines: list[tuple[str, int | None]] = []
+        self._blink_indices: set[int] = set()
+        self._blink_visible = True
+        self._blink_count = 0
+        self._blink_timer: object = None
 
     def compose(self) -> ComposeResult:
         yield self._content
 
-    def update_lines(self, lines: list[str], peer_count: int | None = None) -> None:
+    def update_lines(
+        self,
+        lines: list[str] | list[tuple[str, int | None]],
+        peer_count: int | None = None,
+        blink_indices: set[int] | None = None,
+    ) -> None:
         if peer_count is not None:
             self.border_title = f"{self.title} ({peer_count})"
         else:
@@ -386,10 +522,47 @@ class PeerListPanel(VerticalScroll):
         if not lines:
             self._content.update("... loading")
             return
-        texts = [
-            Text(line, style="dim" if i % 2 == 1 else "")
-            for i, line in enumerate(lines)
+        self._lines = [
+            (item[0], item[1]) if isinstance(item, tuple) else (item, None)
+            for item in lines
         ]
+        if blink_indices:
+            self._blink_indices = blink_indices
+            self._blink_visible = True
+            self._blink_count = 0
+            if self._blink_timer:
+                self._blink_timer.stop()
+            self._blink_timer = self.app.set_interval(0.2, self._blink_tick)
+        else:
+            self._blink_indices = set()
+        self._render_lines()
+
+    def _blink_tick(self) -> None:
+        self._blink_visible = not self._blink_visible
+        self._blink_count += 1
+        self._render_lines()
+        if self._blink_count >= 18:
+            if self._blink_timer:
+                self._blink_timer.stop()
+                self._blink_timer = None
+            self._blink_indices = set()
+            self._blink_visible = True
+
+    def _render_lines(self) -> None:
+        texts: list[Text] = []
+        for i, (line, color_idx) in enumerate(self._lines):
+            base_style = "dim" if i % 2 == 1 else ""
+            if color_idx is not None and 0 <= color_idx < len(PEER_COLORS):
+                if self._blink_indices and i in self._blink_indices and not self._blink_visible:
+                    color = BLINK_DIM
+                else:
+                    color = PEER_COLORS[color_idx]
+                row_text = Text()
+                row_text.append(MAP_MARKER + " ", style=color)
+                row_text.append(line, style=base_style)
+                texts.append(row_text)
+            else:
+                texts.append(Text("  " + line, style=base_style))
         self._content.update(Group(*texts))
 
 
@@ -657,11 +830,12 @@ class LynxTuiApp(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh_all", "Refresh"),
-        ("s", "toggle_staking", "Toggle Staking"),
+        ("s", "toggle_staking", "Staking"),
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
+        ("m", "toggle_map_center", "Map Offset"),
     ]
 
     CSS = """
@@ -685,49 +859,48 @@ class LynxTuiApp(App):
     #overview-grid {
         layout: grid;
         grid-size: 6;
-        grid-gutter: 1 1;
-        grid-rows: 22 auto auto;
+        grid-gutter: 0 1;
+        grid-rows: 22 auto 1fr 1fr 1fr;
         height: 1fr;
         width: 1fr;
     }
     #overview-grid > * {
         column-span: 2;
     }
-    #overview-mempool,
-    #overview-storage {
-        column-span: 1;
+    #send-sweep-slot {
+        column-span: 2;
         height: 9;
         min-height: 6;
         max-height: 9;
+    }
+    #overview-system,
+    #overview-daemon-status,
+    #overview-mempool,
+    #overview-storage {
+        column-span: 1;
+        height: 1fr;
+        min-height: 6;
         overflow-y: scroll;
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
     }
-    #overview-pricing-column {
-        layout: horizontal;
-        max-height: 11;
-    }
-    #overview-pricing-column > * {
+    #map-peer-map {
+        column-span: 4;
+        row-span: 3;
         width: 1fr;
-    }
-    #overview-system-storage-column {
-        column-span: 2;
-        layout: horizontal;
-        max-height: 11;
-    }
-    #overview-system-storage-column > * {
-        width: 1fr;
-    }
-    #overview-system {
         height: 1fr;
-        min-height: 4;
+        min-width: 52;
+        min-height: 22;
+        text-wrap: nowrap;
     }
     #overview-pricing,
-    #overview-value,
-    #overview-daemon-status {
+    #overview-value {
+        column-span: 1;
         height: 1fr;
-        min-height: 4;
-        max-height: 11;
+        min-height: 6;
+        overflow-y: scroll;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
     }
     #overview-network,
     #overview-peers {
@@ -749,9 +922,9 @@ class LynxTuiApp(App):
         scrollbar-gutter: stable;
     }
     #send-card {
-        height: 11;
-        min-height: 11;
-        max-height: 11;
+        height: 9;
+        min-height: 6;
+        max-height: 9;
         padding: 2 2 1 2;
         align: center middle;
         align-horizontal: center;
@@ -792,9 +965,9 @@ class LynxTuiApp(App):
         text-wrap: nowrap;
     }
     #sweep-card {
-        height: 11;
-        min-height: 11;
-        max-height: 11;
+        height: 9;
+        min-height: 6;
+        max-height: 9;
         padding: 2 2 1 2;
         align: center middle;
         align-horizontal: center;
@@ -999,6 +1172,8 @@ class LynxTuiApp(App):
         self.overview_storage = StorageCapabilityPanel(
             "💾 Storage Capability", "node", id="overview-storage"
         )
+        self.peer_map = PeerMapCard(id="map-peer-map")
+        self.geo_cache = GeoCache()
 
         self.block_stats_card = BlockStatsPanel(
             "🧱 Block Statistics", "sync", id="overview-block-stats"
@@ -1028,6 +1203,9 @@ class LynxTuiApp(App):
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
         self._last_notified_block_height: int | None = None
+        self._prev_peer_addresses: set[str] = set()
+        self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
+        self._last_node_center_lon: float | None = None
 
     @staticmethod
     def _format_optional(value: object, empty: str = "-") -> str:
@@ -1164,16 +1342,16 @@ class LynxTuiApp(App):
                             yield self.overview_addresses
                             yield self.node_status_card
                             yield self.block_stats_card
+                            with Container(id="send-sweep-slot"):
+                                yield self.send_card
+                                yield self.sweep_card
+                            yield self.overview_pricing
+                            yield self.overview_value
+                            yield self.peer_map
+                            yield self.overview_system
+                            yield self.overview_daemon_status
                             yield self.overview_mempool
                             yield self.overview_storage
-                            with Container(id="overview-pricing-column"):
-                                yield self.overview_pricing
-                                yield self.overview_value
-                            with Container(id="overview-system-storage-column"):
-                                yield self.overview_system
-                                yield self.overview_daemon_status
-                            yield self.send_card
-                            yield self.sweep_card
                 with TabPane("Settings"):
                     with Container(id="settings"):
                         with Container(id="settings-row"):
@@ -1212,6 +1390,7 @@ class LynxTuiApp(App):
         self.set_timer(1.5, lambda: self.set_interval(60, self.refresh_block_stats))
         self.set_timer(2.0, self.refresh_storage_capacity)
         self.set_timer(2.0, lambda: self.set_interval(900, self.refresh_storage_capacity))
+        self.set_timer(2.5, lambda: self.set_interval(30, self.refresh_node_status_bar))
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -1271,6 +1450,18 @@ class LynxTuiApp(App):
         if self.send_card.display:
             self.send_card.display = False
         self.sweep_card.display = not self.sweep_card.display
+
+    def action_toggle_map_center(self) -> None:
+        """Toggle map view between default (Americas west) and centered on node (m key)."""
+        self._map_center_on_node = not self._map_center_on_node
+        effective_center = self._last_node_center_lon if self._map_center_on_node else None
+        self.peer_map.update_peers(
+            self.peer_map._peer_locations,
+            total_count=self.peer_map._total_count,
+            center_lon=effective_center,
+        )
+        mode = "Estimated Daemon Location" if self._map_center_on_node else "Default View"
+        self.notify(f"Map view: {mode}", title="Map", timeout=2)
 
     async def action_create_new_address(self) -> None:
         """Create a new receiving address (bound to c key)."""
@@ -1447,14 +1638,19 @@ class LynxTuiApp(App):
             if result == "true" or result is True:
                 self._staking_enabled = True
                 self.node_status_card.update_staking_status("enabled")
+                self.node_status_card.refresh()
+                self.notify("Staking enabled", title="Staking", timeout=3)
             elif result == "false" or result is False:
                 self._staking_enabled = False
                 self.node_status_card.update_staking_status("disabled")
-
-            self.node_status_card.refresh()
+                self.node_status_card.refresh()
+                self.notify("Staking disabled", title="Staking", timeout=3)
+            else:
+                self.node_status_card.refresh()
         except Exception as e:
             self.node_status_card.update_staking_status(f"error: {str(e)[:20]}")
             self.node_status_card.refresh()
+            self.notify(str(e)[:60], title="Staking error", severity="error", timeout=5)
 
     def on_selection_list_selection_toggled(self, event: SelectionList.SelectionToggled) -> None:
         if event.selection_list.id == "timezone-select":
@@ -1477,6 +1673,17 @@ class LynxTuiApp(App):
         """Automatic refresh with yellow indicator."""
         self.header.set_indicator("yellow")
         await self.refresh_data()
+
+    async def refresh_node_status_bar(self) -> None:
+        """Refresh the status bar node status every 30 seconds."""
+        self.status_bar.node_status = "refreshing"
+        self.header.update_clock()
+        status = await asyncio.get_event_loop().run_in_executor(
+            None, self.rpc.get_daemon_status
+        )
+        self.status_bar.node_status = status
+        self.status_bar.refresh()
+        self.header.update_clock()
 
     async def refresh_data(self) -> None:
         data = await asyncio.get_event_loop().run_in_executor(None, self.rpc.fetch_snapshot)
@@ -1595,7 +1802,7 @@ class LynxTuiApp(App):
                 return value[:width]
             return f"{value[: width - 1]}…"
 
-        peer_rows: list[tuple[int, str]] = []
+        peer_rows: list[tuple[int, str, dict]] = []
         addr_width = 22
         subver_width = 16
         synced_width = 11
@@ -1624,16 +1831,70 @@ class LynxTuiApp(App):
             synced_col = fit_column(synced, synced_width)
             ping_col = fit_column(f"ping: {ping_display}", ping_width)
             line = f"{addr_col}{subver_col}{synced_col}{ping_col}"
-            peer_rows.append((synced_value, line))
+            peer_rows.append((synced_value, line, peer))
         peer_rows.sort(key=lambda row: row[0], reverse=True)
-        peer_lines = [line for _, line in peer_rows]
-        if not peer_lines:
+
+        def _host_from_peer(peer: dict) -> str:
+            addr = peer.get("addr", "")
+            if ":" in addr:
+                host, _ = addr.rsplit(":", 1)
+                return host.replace("[", "").replace("]", "")
+            return addr
+
+        current_addresses = {_host_from_peer(p) for _, _, p in peer_rows if _host_from_peer(p)}
+        new_addresses = (
+            current_addresses - self._prev_peer_addresses
+            if self._prev_peer_addresses
+            else set()
+        )
+        self._prev_peer_addresses = current_addresses
+
+        def _fetch_peer_locations_and_colors() -> tuple[
+            list[tuple[float, float]], list[int | None], float | None, set[int], set[int]
+        ]:
+            locs: list[tuple[float, float]] = []
+            color_indices: list[int | None] = []
+            blink_list_indices: set[int] = set()
+            blink_marker_indices: set[int] = set()
+            for i, (_, _, peer) in enumerate(peer_rows):
+                host = _host_from_peer(peer)
+                if host:
+                    geo = self.geo_cache.lookup(host)
+                    if geo:
+                        marker_idx = len(locs)
+                        color_indices.append(marker_idx)
+                        locs.append((geo["lat"], geo["lon"]))
+                        if host in new_addresses:
+                            blink_list_indices.add(i)
+                            blink_marker_indices.add(marker_idx)
+                    else:
+                        color_indices.append(None)
+                else:
+                    color_indices.append(None)
+            my_loc = self.geo_cache.get_my_location()
+            center_lon = my_loc[1] if my_loc else None
+            return locs, color_indices, center_lon, blink_list_indices, blink_marker_indices
+
+        (
+            peer_locs,
+            peer_color_indices,
+            center_lon,
+            blink_list_indices,
+            blink_marker_indices,
+        ) = await asyncio.get_event_loop().run_in_executor(
+            None, _fetch_peer_locations_and_colors
+        )
+
+        peer_lines_with_colors: list[tuple[str, int | None]] = [
+            (line, peer_color_indices[i]) for i, (_, line, _) in enumerate(peer_rows)
+        ]
+        if not peer_lines_with_colors:
             daemon_status = data.get("daemon_status", "unknown")
-            peer_lines = (
-                ["Daemon starting or offline."]
+            peer_lines_with_colors = [
+                ("Daemon starting or offline.", None)
                 if daemon_status != "running"
-                else ["No peers connected."]
-            )
+                else ("No peers connected.", None)
+            ]
         peer_count = len(peer_info)
         
         # Get all addresses - merge data from both sources
@@ -1838,7 +2099,25 @@ class LynxTuiApp(App):
                 network_entries, count=50, time_since_latest=time_since
             ),
         )
-        self._schedule_update(0.2, lambda: self.overview_peers.update_lines(peer_lines, peer_count=peer_count))
+        self._schedule_update(
+            0.2,
+            lambda: self.overview_peers.update_lines(
+                peer_lines_with_colors,
+                peer_count=peer_count,
+                blink_indices=blink_list_indices,
+            ),
+        )
+        self._last_node_center_lon = center_lon
+        effective_center = center_lon if self._map_center_on_node else None
+        self._schedule_update(
+            0.25,
+            lambda: self.peer_map.update_peers(
+                peer_locs,
+                total_count=peer_count,
+                center_lon=effective_center,
+                blink_indices=blink_marker_indices,
+            ),
+        )
         self._schedule_update(
             0.3,
             lambda: self.overview_addresses.update_lines(
@@ -1859,6 +2138,7 @@ class LynxTuiApp(App):
         daemon_status_lines = [
             f"Lynx Uptime  {uptime_display}",
             f"Version      {daemon_version}",
+            f"Sync monitor {data['sync_monitor']}",
             f"Tenant       unregistered",
         ]
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
@@ -1871,7 +2151,6 @@ class LynxTuiApp(App):
             f"RPC port: {data['rpc_port']}",
             f"RPC security: {data['rpc_security']}",
             f"Working dir: {data['working_dir']}",
-            f"Sync monitor: {data['sync_monitor']}",
             "Daemon control: systemctl start|stop lynx",
         ]
 
@@ -1926,8 +2205,8 @@ class LynxTuiApp(App):
             )
             self.node_status_card.update_staking_status(staking_status)
 
-            self.status_bar.sync_monitor = data["sync_monitor"]
             self.status_bar.refresh()
+            self.header.update_clock()
 
         self._schedule_update(0.5, update_status)
 
