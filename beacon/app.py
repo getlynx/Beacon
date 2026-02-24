@@ -1586,8 +1586,8 @@ class LynxTuiApp(App):
         self.set_timer(2.5, lambda: self.set_interval(30, self.refresh_node_status_bar))
         self.set_timer(5.0, self._check_for_update)
         self.set_timer(5.0, lambda: self.set_interval(3600, self._check_for_update))
-        self.set_timer(3.0, self._refresh_network_node_count)
-        self.set_timer(3.0, lambda: self.set_interval(900, self._refresh_network_node_count))
+        self.set_timer(6.0, self._refresh_network_node_count)
+        self.set_timer(6.0, lambda: self.set_interval(900, self._refresh_network_node_count))
         self.set_timer(8.0, self._check_first_run_welcome)
         self.set_timer(10.0, self._check_milestones)
         self.set_timer(10.0, lambda: self.set_interval(60, self._check_milestones))
@@ -2561,13 +2561,20 @@ class LynxTuiApp(App):
     def _fetch_network_node_count() -> int | None:
         import urllib.request, json as _json
         try:
-            req = urllib.request.Request(CRYPTOID_NODES_URL)
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = _json.loads(resp.read())
+            req = urllib.request.Request(
+                CRYPTOID_NODES_URL,
+                headers={"User-Agent": "Beacon/1.0"},
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read()
+            data = _json.loads(raw)
+            if not isinstance(data, list):
+                return None
             all_ips: set[str] = set()
             for group in data:
-                for node in group.get("nodes", []):
-                    all_ips.add(node)
+                if isinstance(group, dict):
+                    for node in group.get("nodes", []):
+                        all_ips.add(node)
             return len(all_ips) if all_ips else None
         except Exception:
             return None
