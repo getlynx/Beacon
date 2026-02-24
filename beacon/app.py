@@ -477,6 +477,8 @@ class DifficultyChartPanel(Container):
         self.add_class("activity")
         self._difficulty_data: list[float] = []
         self._sparkline: Sparkline | None = None
+        self._sync_message = Static("", id="difficulty-sync-message")
+        self._syncing = False
 
     def compose(self) -> ComposeResult:
         self._sparkline = Sparkline(
@@ -484,7 +486,25 @@ class DifficultyChartPanel(Container):
             summary_function=max,
             id="difficulty-sparkline",
         )
+        yield self._sync_message
         yield self._sparkline
+
+    def set_syncing(self, syncing: bool) -> None:
+        if syncing == self._syncing:
+            return
+        self._syncing = syncing
+        if syncing:
+            self._sync_message.update(
+                "Proof of Stake difficulty chart will be\n"
+                "available after the network sync completes."
+            )
+            self._sync_message.display = True
+            if self._sparkline:
+                self._sparkline.display = False
+        else:
+            self._sync_message.display = False
+            if self._sparkline:
+                self._sparkline.display = True
 
     def update_difficulty(self, value: float, prepend: bool = False) -> None:
         """Add a difficulty value. prepend=True for new blocks, False for backfill.
@@ -769,6 +789,7 @@ class NetworkActivityPanel(VerticalScroll):
         self._heights: list[int] = []
         self._raw_entries: list[tuple[int, str, str, str, str]] = []
         self._difficulties: list[float] | None = None
+        self._syncing = False
 
     def compose(self) -> ComposeResult:
         yield self._content
@@ -780,21 +801,16 @@ class NetworkActivityPanel(VerticalScroll):
         if not self._raw_entries:
             return
         try:
-            # Use visible viewport width; subtract scrollbar, padding, border
             width = max(48, self.size.width - 6)
         except Exception:
             width = 60
-        time_width = max(8, width - _NETWORK_FIXED_TOTAL)
+        show_diff = not self._syncing
+        fixed_total = _NETWORK_FIXED_TOTAL if show_diff else (_NETWORK_FIXED_TOTAL - _NETWORK_DIFF_W - 2)
+        time_width = max(8, width - fixed_total)
         lines = []
         for i, (height, hash_short, time_display, delta_display, empty_marker) in enumerate(
             self._raw_entries
         ):
-            if self._difficulties is not None and i < len(self._difficulties):
-                diff_str = _format_difficulty_short(
-                    self._difficulties[i], _NETWORK_DIFF_W
-                )
-            else:
-                diff_str = "-".rjust(_NETWORK_DIFF_W)
             time_trunc = (
                 time_display[-time_width:] if len(time_display) > time_width
                 else time_display
@@ -806,8 +822,17 @@ class NetworkActivityPanel(VerticalScroll):
                 f"{delta_display:<{_NETWORK_DELTA_W}}  "
                 f"{empty_marker:<{_NETWORK_EMPTY_W}}"
             )
-            pad = max(0, width - len(left) - _NETWORK_DIFF_W)
-            line = left + " " * pad + diff_str
+            if show_diff:
+                if self._difficulties is not None and i < len(self._difficulties):
+                    diff_str = _format_difficulty_short(
+                        self._difficulties[i], _NETWORK_DIFF_W
+                    )
+                else:
+                    diff_str = "-".rjust(_NETWORK_DIFF_W)
+                pad = max(0, width - len(left) - _NETWORK_DIFF_W)
+                line = left + " " * pad + diff_str
+            else:
+                line = left
             lines.append(line)
         texts = [
             Text(line, style="dim" if i % 2 == 1 else "")
@@ -821,10 +846,12 @@ class NetworkActivityPanel(VerticalScroll):
         count: int | None = None,
         time_since_latest: str | None = None,
         difficulties: list[float] | None = None,
+        syncing: bool = False,
     ) -> None:
         self._heights = [e[0] for e in entries]
         self._raw_entries = entries
         self._difficulties = difficulties
+        self._syncing = syncing
         if count is not None:
             self.border_title = f"{self.title} ({count})"
         else:
@@ -1007,13 +1034,13 @@ class ShareCard(Static):
             "Help grow the network!\n"
             "Share this with a friend:\n"
             "\n"
-            "  I'm staking on the Lynx Data\n"
-            "  Storage Network and earning\n"
-            "  rewards. Set up your own node\n"
-            "  in about 5 minutes on any VPS\n"
-            "  or Raspberry Pi.\n"
+            "I'm staking on the global Lynx\n"
+            "Data Storage Network and earning\n"
+            "rewards. Set up your own node\n"
+            "in about 5 minutes on any VPS\n"
+            "or Raspberry Pi.\n"
             "\n"
-            "  github.com/getlynx/Beacon"
+            "github.com/getlynx/Beacon"
             f"{count_line}"
         )
 
@@ -1076,6 +1103,14 @@ class LynxTuiApp(App):
     #difficulty-chart {
         height: 1fr;
         padding: 1;
+    }
+    #difficulty-sync-message {
+        width: 1fr;
+        height: auto;
+        content-align: center middle;
+        text-align: center;
+        padding: 2 1;
+        display: none;
     }
     #difficulty-sparkline {
         width: 1fr;
@@ -1299,7 +1334,11 @@ class LynxTuiApp(App):
         margin-top: 0;
         margin-left: 2;
         border: solid $primary-darken-2;
-        padding: 1 2;
+        padding: 3 4;
+        content-align: center middle;
+    }
+    .share-content {
+        text-align: center;
     }
     #timezone-select {
         width: 1fr;
@@ -1667,6 +1706,8 @@ class LynxTuiApp(App):
     def _difficulty_backfill_tick(self) -> None:
         """Fetch one block's PoS difficulty every 0.1s until we have DIFFICULTY_BLOCK_COUNT."""
         if self._difficulty_backfill_index >= DIFFICULTY_BLOCK_COUNT:
+            return
+        if self.difficulty_chart._syncing:
             return
         async def _do() -> None:
             result = await asyncio.get_event_loop().run_in_executor(
@@ -2383,6 +2424,8 @@ class LynxTuiApp(App):
         if tz_name:
             time_since = f"{time_since} ({tz_name})"
         difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
+        is_syncing = bool(blockchain_info.get("initialblockdownload"))
+        self.difficulty_chart.set_syncing(is_syncing)
         self._schedule_update(
             0.1,
             lambda: self.overview_network.update_entries(
@@ -2390,6 +2433,7 @@ class LynxTuiApp(App):
                 count=50,
                 time_since_latest=time_since,
                 difficulties=difficulty_data if difficulty_data else None,
+                syncing=is_syncing,
             ),
         )
         self._schedule_update(
