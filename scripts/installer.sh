@@ -195,7 +195,7 @@ ExecStop=/usr/local/bin/lynx-cli -datadir=${WORKING_DIR} stop
 Restart=on-failure
 RestartSec=30
 User=root
-TimeoutStartSec=300
+TimeoutStartSec=600
 TimeoutStopSec=60
 WorkingDirectory=${WORKING_DIR}
 
@@ -205,10 +205,11 @@ EOF
 
   systemctl daemon-reload
   systemctl enable lynx.service
-  systemctl start lynx.service || true
+  systemctl start --no-block lynx.service || true
 }
 
 install_sync_monitor() {
+  mkdir -p "${INSTALL_ROOT}"
   cat <<'EOF' > "${INSTALL_ROOT}/lynx-sync-monitor.sh"
 #!/bin/bash
 
