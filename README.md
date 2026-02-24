@@ -43,7 +43,6 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 | `x` | Open send card |
 | `w` | Open sweep card |
 | `m` | Toggle map offset |
-| `p` | Copy a shareable status line to the clipboard |
 | `u` | Apply update (only visible when an update is available) |
 
 ## Auto-update

@@ -986,6 +986,32 @@ class CurrencyCard(VerticalScroll):
             yield self._currency_apply
 
 
+class ShareCard(Static):
+    """Settings card with a shareable message the user can copy."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = "📣 Share"
+        self.border_title_align = ("left", "top")
+        self.add_class("card")
+        self._content = Static("", classes="share-content")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def refresh_message(self, node_count: int | None = None) -> None:
+        count_part = ""
+        if node_count and node_count > 0:
+            count_part = f" -- {node_count} nodes strong"
+        text = (
+            f"I'm staking on the Lynx Data Storage Network"
+            f"{count_part}. Join: beacon.getlynx.io"
+        )
+        self._content.update(
+            f"Copy and share with your friends:\n\n  {text}"
+        )
+
+
 # All built-in themes + custom themes for cycle
 THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
     "beacon-high-contrast-dark",
@@ -1004,7 +1030,6 @@ class LynxTuiApp(App):
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_map_center", "Map Offset"),
-        ("p", "share_status", "Share"),
     ]
 
     CSS = """
@@ -1262,6 +1287,13 @@ class LynxTuiApp(App):
         width: 50;
         height: 22;
     }
+    #share-card-settings {
+        width: 50;
+        height: 7;
+        margin-top: 1;
+        border: solid $primary-darken-2;
+        padding: 1 2;
+    }
     #timezone-select {
         width: 1fr;
         height: 12;
@@ -1390,6 +1422,7 @@ class LynxTuiApp(App):
             self.currency_status,
             id="currency-card",
         )
+        self.share_card = ShareCard(id="share-card-settings")
         self._currency = "USD"
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
@@ -1549,6 +1582,7 @@ class LynxTuiApp(App):
                         with Container(id="settings-row"):
                             yield self.timezone_card
                             yield self.currency_card
+                        yield self.share_card
         yield self.status_bar
         yield Footer()
 
@@ -1586,6 +1620,7 @@ class LynxTuiApp(App):
         self.set_timer(2.5, lambda: self.set_interval(30, self.refresh_node_status_bar))
         self.set_timer(5.0, self._check_for_update)
         self.set_timer(5.0, lambda: self.set_interval(3600, self._check_for_update))
+        self.share_card.refresh_message()
         self.set_timer(6.0, self._refresh_network_node_count)
         self.set_timer(6.0, lambda: self.set_interval(900, self._refresh_network_node_count))
         self.set_timer(8.0, self._check_first_run_welcome)
@@ -2585,6 +2620,7 @@ class LynxTuiApp(App):
         )
         if count is not None:
             self.peer_map.set_network_node_count(count)
+        self.share_card.refresh_message(count)
 
     # --- First-run welcome ---
 
@@ -2616,63 +2652,6 @@ class LynxTuiApp(App):
                     pass
         except Exception:
             pass
-
-    # --- Share hotkey ---
-
-    async def action_share_status(self) -> None:
-        """Hotkey 'p': copy a shareable status line to the clipboard."""
-        location = ""
-        try:
-            tz = datetime.now().astimezone().tzname() or ""
-            if tz:
-                location = f" ({tz})"
-        except Exception:
-            pass
-
-        node_count = self.peer_map._network_node_count
-        count_part = ""
-        if node_count and node_count > 0:
-            count_part = f" -- {node_count} nodes strong"
-
-        text = (
-            f"I'm staking on the Lynx Data Storage Network{location}"
-            f"{count_part}. Join: beacon.getlynx.io"
-        )
-
-        copied = False
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "xclip", "-selection", "clipboard",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            await proc.communicate(text.encode())
-            if proc.returncode == 0:
-                copied = True
-        except FileNotFoundError:
-            pass
-
-        if not copied:
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "xsel", "--clipboard", "--input",
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc.communicate(text.encode())
-                if proc.returncode == 0:
-                    copied = True
-            except FileNotFoundError:
-                pass
-
-        if not copied:
-            osc52 = f"\033]52;c;{__import__('base64').b64encode(text.encode()).decode()}\a"
-            self.console.file.write(osc52)
-            self.console.file.flush()
-
-        self.notify(text, severity="information", timeout=10)
 
     # --- Milestone notifications ---
 
