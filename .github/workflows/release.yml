@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/^__version__ = .*/__version__ = \"${VERSION}\"/" beacon/__init__.py
+          sed -i "s/^ version = .*/version = \"${VERSION}\"/" pyproject.toml
+
+      - name: Build app tarball
+        run: |
+          tar -czf beacon.tar.gz \
+            --transform 's,^,beacon/,' \
+            beacon/ pyproject.toml README.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            beacon.tar.gz
+            scripts/installer.sh
+          generate_release_notes: true

@@ -9,6 +9,7 @@ dependencies = [
   "requests>=2.31.0",
   "pyproj>=3.0.0",
   "shapely>=2.0.0",
+  "packaging>=21.0",
 ]
  
  [build-system]
@@ -18,3 +19,6 @@ dependencies = [
  [tool.setuptools.packages.find]
  where = ["."]
 include = ["beacon*"]
+
+[tool.setuptools.package-data]
+beacon = ["assets/*"]

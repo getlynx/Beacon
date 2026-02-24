@@ -1,9 +1,11 @@
 import asyncio
 import os
 import re
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from packaging.version import Version, InvalidVersion
 
 from textual.app import App, ComposeResult
 from textual import events
@@ -14,6 +16,7 @@ from textual.widgets import Button, Footer, Input, SelectionList, Sparkline, Sta
 from rich.console import Group
 from rich.text import Text
 
+from beacon import __version__ as BEACON_VERSION
 from beacon.services.geolocation import GeoCache
 from beacon.services.map_renderer import (
     BLINK_DIM,
@@ -25,6 +28,13 @@ from beacon.services.logs import LogTailer
 from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
 from beacon.services.system import SystemClient
+
+BEACON_REPO = "getlynx/Beacon"
+BEACON_TARBALL_URL = "https://github.com/getlynx/Beacon/releases/latest/download/beacon.tar.gz"
+INSTALL_ROOT = "/usr/local/beacon"
+
+# PoS difficulty chart: number of blocks to display (backfill fetches this many)
+DIFFICULTY_BLOCK_COUNT = 100
 
 # Top 10 global currencies supported by all 3 FX APIs (Frankfurter, ExchangeRate-API, fawazahmed0)
 SUPPORTED_CURRENCIES: list[tuple[str, str]] = [
@@ -140,7 +150,6 @@ class CustomHeader(Static):
         time_str = now.strftime("%A, %B %d, %Y  %I:%M:%S %p")
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
-        # Node status on left (from status_bar)
         node_status = "unknown"
         if hasattr(self.app, 'status_bar') and self.app.status_bar:
             node_status = self.app.status_bar.node_status
@@ -154,54 +163,55 @@ class CustomHeader(Static):
             status_emoji = "🔴"
             display = "Daemon starting or offline"
         node_status_str = f"{status_emoji} Node Status: {display} "
+
+        update_str = ""
+        if hasattr(self.app, '_update_available') and self.app._update_available:
+            update_str = f"⬆ v{self.app._update_available} available (u) "
         
-        # Select emoji based on state
         indicator_emoji = {
             "green": "🟢",
             "yellow": "🟡",
             "blue": "🔵"
         }.get(self.indicator_state, "🟢")
         
-        # Left: node status, center: title, right: time + indicator
-        # Emoji needs 2 display cells; reserve extra column so it doesn't clip at edge
         try:
             width = self.size.width
             time_with_indicator = f"{time_str} {indicator_emoji}"
             time_len = len(time_with_indicator)
-            title_len = len(title)
-            left_len = len(node_status_str)
             
-            # Truncate node status if needed to avoid overlap with time
-            if left_len + time_len > width:
-                max_left = max(0, width - time_len - 2)
+            if len(node_status_str) + len(update_str) + time_len > width:
+                max_left = max(0, width - time_len - len(update_str) - 2)
                 node_status_str = node_status_str[:max_left] if max_left > 0 else ""
-            left_len = len(node_status_str)
             
-            # Build the display string
             line = [' '] * width
             
-            # Place right-aligned time with indicator; offset so emoji (2-cell) doesn't clip
             time_start = width - time_len - 2
             for i, char in enumerate(time_with_indicator):
                 pos = time_start + i
                 if 0 <= pos < width:
                     line[pos] = char
             
-            # Place node status on left
-            for i, char in enumerate(node_status_str):
-                if 0 <= i < width:
-                    line[i] = char
-            
-            # Place centered title (do not overwrite time region)
-            title_start = (width - title_len) // 2
+            cursor = 0
+            for char in node_status_str:
+                if cursor < width:
+                    line[cursor] = char
+                    cursor += 1
+
+            if update_str:
+                for char in update_str:
+                    if cursor < time_start:
+                        line[cursor] = char
+                        cursor += 1
+
+            title_start = max(cursor, (width - len(title)) // 2)
             for i, char in enumerate(title):
                 pos = title_start + i
-                if 0 <= pos < time_start:
+                if pos < time_start:
                     line[pos] = char
             
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{title}  {time_str} {indicator_emoji}")
+            self.update(f"{node_status_str}{update_str}{title}  {time_str} {indicator_emoji}")
 
 
 class StatusBar(Static):
@@ -312,7 +322,7 @@ class PeerMapCard(Static):
     def __init__(self, **kwargs: object) -> None:
         super().__init__(markup=False, **kwargs)
         self.border_title = "🌍 Peer Map"
-        self.border_subtitle = "(No Coal Required)"
+        self.border_subtitle = ""
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
@@ -361,9 +371,9 @@ class PeerMapCard(Static):
 
     def _update_subtitle(self) -> None:
         if self._total_count > 0:
-            self.border_subtitle = f"{self._mapped_count} of {self._total_count} mapped (No Coal Required)"
+            self.border_subtitle = f"{self._mapped_count} of {self._total_count} mapped"
         else:
-            self.border_subtitle = "(No Coal Required)"
+            self.border_subtitle = ""
 
     def _get_map_dimensions(self) -> tuple[int, int]:
         """Get cols, rows from widget size. Uses inner size minus border/padding."""
@@ -447,12 +457,12 @@ def _format_difficulty_short(value: float, width: int = 5) -> str:
 
 
 class DifficultyChartPanel(Container):
-    """Card with Sparkline showing PoS difficulty for last 100 blocks."""
+    """Card with Sparkline showing PoS difficulty for last N blocks."""
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.border_title = "🔗 Proof of Stake Difficulty"
-        self.border_subtitle = "0 of 100 latest blocks (newest on left)"
+        self.border_subtitle = f"0 of {DIFFICULTY_BLOCK_COUNT} latest blocks (newest on left)"
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
@@ -473,16 +483,16 @@ class DifficultyChartPanel(Container):
         Values are normalized to 0-1 range for display so the chart handles any magnitude."""
         if prepend:
             self._difficulty_data.insert(0, value)
-            if len(self._difficulty_data) > 100:
+            if len(self._difficulty_data) > DIFFICULTY_BLOCK_COUNT:
                 self._difficulty_data.pop()
         else:
             self._difficulty_data.append(value)
-            if len(self._difficulty_data) > 100:
-                self._difficulty_data = self._difficulty_data[-100:]
+            if len(self._difficulty_data) > DIFFICULTY_BLOCK_COUNT:
+                self._difficulty_data = self._difficulty_data[-DIFFICULTY_BLOCK_COUNT:]
         if self._sparkline is not None:
             normalized = self._normalize_for_display(self._difficulty_data)
             self._sparkline.data = normalized
-        self.border_subtitle = f"{len(self._difficulty_data)} of 100 latest blocks (newest on left)"
+        self.border_subtitle = f"{len(self._difficulty_data)} of {DIFFICULTY_BLOCK_COUNT} latest blocks (newest on left)"
 
     def _normalize_for_display(self, data: list[float]) -> list[float]:
         """Normalize values to 0-1 range so chart renders regardless of magnitude."""
@@ -1316,6 +1326,8 @@ class LynxTuiApp(App):
         self._node_version: str | None = None
         self._send_txid_timer = None
         self._sweep_txid_timer = None
+        self._update_available: str | None = None
+        self._update_in_progress = False
         self.title = "...loading Beacon for the Lynx Data Storage Network"
 
         self.node_status_card = StakingPanel("🏆 Staking", "staking", id="overview-node-status")
@@ -1558,11 +1570,13 @@ class LynxTuiApp(App):
         self.set_timer(0.5, self.refresh_timezone)
         self.set_timer(0.8, lambda: self.set_interval(3600, self.refresh_node_version))
         self.set_timer(1.0, lambda: self.set_interval(5, self.auto_refresh_data))
-        self.set_timer(1.5, lambda: self.set_interval(1, self._difficulty_backfill_tick))
+        self.set_timer(1.5, lambda: self.set_interval(0.1, self._difficulty_backfill_tick))
         self.set_timer(1.5, lambda: self.set_interval(60, self.refresh_block_stats))
         self.set_timer(2.0, self.refresh_storage_capacity)
         self.set_timer(2.0, lambda: self.set_interval(900, self.refresh_storage_capacity))
         self.set_timer(2.5, lambda: self.set_interval(30, self.refresh_node_status_bar))
+        self.set_timer(5.0, self._check_for_update)
+        self.set_timer(5.0, lambda: self.set_interval(3600, self._check_for_update))
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -1595,8 +1609,8 @@ class LynxTuiApp(App):
             return None
 
     def _difficulty_backfill_tick(self) -> None:
-        """Fetch one block's PoS difficulty every 1s until we have 100."""
-        if self._difficulty_backfill_index >= 100:
+        """Fetch one block's PoS difficulty every 0.1s until we have DIFFICULTY_BLOCK_COUNT."""
+        if self._difficulty_backfill_index >= DIFFICULTY_BLOCK_COUNT:
             return
         async def _do() -> None:
             result = await asyncio.get_event_loop().run_in_executor(
@@ -2358,9 +2372,13 @@ class LynxTuiApp(App):
             else "unknown"
         )
         self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines, staking_status=staking_status))
+        beacon_ver_display = f"v{BEACON_VERSION}"
+        if self._update_available:
+            beacon_ver_display += f" (v{self._update_available} available)"
         daemon_status_lines = [
             f"Lynx Uptime  {uptime_display}",
             f"Version      {daemon_version}",
+            f"Beacon       {beacon_ver_display}",
             f"Sync monitor {data['sync_monitor']}",
             f"Tenant       unregistered",
         ]
@@ -2522,6 +2540,111 @@ class LynxTuiApp(App):
         if disk_lines:
             storage_lines = disk_lines + storage_lines
         self.overview_storage.update_lines(storage_lines)
+
+    # --- Auto-update ---
+
+    @staticmethod
+    def _fetch_latest_release_tag() -> str | None:
+        """Hit GitHub API for latest release tag. Returns tag like 'v0.2.0' or None."""
+        import urllib.request, json as _json
+        url = f"https://api.github.com/repos/{BEACON_REPO}/releases/latest"
+        req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read())
+            return data.get("tag_name")
+        except Exception:
+            return None
+
+    def _sync_update_binding(self) -> None:
+        """Show or hide the 'u' key in the footer based on update availability."""
+        has_binding = any(b.key == "u" for b in self._bindings.keys.values())
+        if self._update_available and not has_binding:
+            self.bind("u", "apply_update", description="Update ⬆")
+        elif not self._update_available and has_binding:
+            try:
+                self._bindings.keys.pop("u", None)
+            except Exception:
+                pass
+        self.refresh_bindings()
+
+    async def _check_for_update(self) -> None:
+        """Periodic check: compare local version against latest GitHub release."""
+        tag = await asyncio.get_event_loop().run_in_executor(
+            None, self._fetch_latest_release_tag
+        )
+        if tag is None:
+            return
+        remote_ver_str = tag.lstrip("v")
+        try:
+            remote_ver = Version(remote_ver_str)
+            local_ver = Version(BEACON_VERSION)
+        except InvalidVersion:
+            return
+        if remote_ver > local_ver:
+            self._update_available = remote_ver_str
+        else:
+            self._update_available = None
+        self._sync_update_binding()
+
+    async def action_apply_update(self) -> None:
+        """Hotkey 'u': download and install the latest release, then restart."""
+        if self._update_in_progress:
+            return
+        if self._update_available is None:
+            self.notify("Beacon is up to date.", severity="information", timeout=4)
+            return
+        self._update_in_progress = True
+        self.notify(
+            f"Downloading Beacon v{self._update_available}...",
+            severity="information",
+            timeout=5,
+        )
+
+        def _do_update() -> tuple[bool, str]:
+            import tempfile, tarfile, shutil
+            try:
+                import urllib.request
+                tmp = tempfile.mkdtemp(prefix="beacon-update-")
+                tarball = os.path.join(tmp, "beacon.tar.gz")
+                urllib.request.urlretrieve(BEACON_TARBALL_URL, tarball)
+                with tarfile.open(tarball, "r:gz") as tf:
+                    tf.extractall(tmp)
+                extracted = os.path.join(tmp, "beacon")
+                if not os.path.isdir(extracted):
+                    dirs = [d for d in os.listdir(tmp) if os.path.isdir(os.path.join(tmp, d))]
+                    if dirs:
+                        extracted = os.path.join(tmp, dirs[0])
+                venv = "/usr/local/beacon/venv"
+                pip = os.path.join(venv, "bin", "pip")
+                if not os.path.isfile(pip):
+                    return False, "Virtual environment not found at /usr/local/beacon/venv"
+                result = subprocess.run(
+                    [pip, "install", "--upgrade", "."],
+                    cwd=extracted,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                shutil.rmtree(tmp, ignore_errors=True)
+                if result.returncode != 0:
+                    return False, result.stderr[:300]
+                return True, ""
+            except Exception as exc:
+                return False, str(exc)[:300]
+
+        success, err = await asyncio.get_event_loop().run_in_executor(None, _do_update)
+        self._update_in_progress = False
+        if success:
+            self._update_available = None
+            self._sync_update_binding()
+            self.notify(
+                "Update installed! Press 'q' to quit, then run 'beacon' to restart.",
+                severity="information",
+                timeout=10,
+            )
+        else:
+            self.notify(f"Update failed: {err}", severity="error", timeout=8)
 
 
 def run() -> None:

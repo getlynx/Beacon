@@ -92,12 +92,9 @@ update_login_bashrc() {
 
   block=$(cat <<'EOF'
 # >>> beacon >>>
-# Set alias and autostart Beacon on interactive login.
 alias beacon="/usr/local/bin/beacon"
-if [[ $- == *i* ]] && command -v beacon >/dev/null 2>&1; then
-  if ! pgrep -u "$USER" -f "python -m beacon" >/dev/null 2>&1; then
-    beacon >/dev/null 2>&1 &
-  fi
+if [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && command -v beacon >/dev/null 2>&1; then
+  beacon
 fi
 # <<< beacon <<<
 EOF
@@ -131,30 +128,6 @@ EOF
 
   chown "$target_user":"$target_user" "$bashrc" 2>/dev/null || true
 }
- 
- install_sync_wait_script() {
-   cat <<'EOF' > "${INSTALL_ROOT}/sync-wait.sh"
-#!/bin/bash
-
-set -euo pipefail
-
-WORKING_DIR="${LYNX_WORKING_DIR:-/var/lib/lynx}"
-RPC_CLI="/usr/local/bin/lynx-cli"
-
-if [ ! -x "$RPC_CLI" ]; then
-  exit 0
-fi
-
-info=$("$RPC_CLI" -datadir="$WORKING_DIR" getblockchaininfo 2>/dev/null || true)
-if echo "$info" | grep -q '"initialblockdownload":[[:space:]]*false'; then
-  systemctl enable lynx-tui.service >/dev/null 2>&1 || true
-  systemctl start lynx-tui.service >/dev/null 2>&1 || true
-  systemctl stop lynx-sync-wait.timer >/dev/null 2>&1 || true
-  systemctl disable lynx-sync-wait.timer >/dev/null 2>&1 || true
-fi
-EOF
-   chmod +x "${INSTALL_ROOT}/sync-wait.sh"
- }
  
 ensure_working_dir() {
   mkdir -p "$WORKING_DIR"
@@ -286,53 +259,6 @@ EOF
   systemctl start lynx-sync-monitor.timer
 }
 
- install_systemd_units() {
-   cat <<'EOF' > /etc/systemd/system/lynx-tui.service
-[Unit]
-Description=Beacon
-After=network.target lynx.service
-Wants=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/beacon
-Restart=on-failure
-User=root
-WorkingDirectory=/root
-Environment=LYNX_WORKING_DIR=/var/lib/lynx
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-   cat <<'EOF' > /etc/systemd/system/lynx-sync-wait.service
-[Unit]
-Description=Wait for LYNX sync completion
-After=network.target lynx.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/beacon/sync-wait.sh
-EOF
-
-   cat <<'EOF' > /etc/systemd/system/lynx-sync-wait.timer
-[Unit]
-Description=Check LYNX sync status
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-Unit=lynx-sync-wait.service
-
-[Install]
-WantedBy=timers.target
-EOF
-
-   systemctl daemon-reload
-   systemctl enable lynx-sync-wait.timer
-   systemctl start lynx-sync-wait.timer
- }
- 
  main() {
    require_root
    detect_os
@@ -345,9 +271,7 @@ EOF
    install_app
    install_launcher
   update_login_bashrc
-   install_sync_wait_script
-   install_systemd_units
-  echo "Beacon installed. It will start automatically after sync completes."
+  echo "Beacon installed. Run 'beacon' or log in as root to start the TUI."
  }
  
  main "$@"
