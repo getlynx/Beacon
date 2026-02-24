@@ -32,6 +32,8 @@ from beacon.services.system import SystemClient
 BEACON_REPO = "getlynx/Beacon"
 BEACON_TARBALL_URL = "https://github.com/getlynx/Beacon/releases/latest/download/beacon.tar.gz"
 INSTALL_ROOT = "/usr/local/beacon"
+CRYPTOID_NODES_URL = "https://chainz.cryptoid.info/lynx/api.dws?q=nodes"
+LYNX_WORKING_DIR = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
 
 # PoS difficulty chart: number of blocks to display (backfill fetches this many)
 DIFFICULTY_BLOCK_COUNT = 100
@@ -335,6 +337,7 @@ class PeerMapCard(Static):
         self._blink_visible = True
         self._blink_count = 0
         self._blink_timer: object = None
+        self._network_node_count: int | None = None
 
     def on_mount(self) -> None:
         # Defer initial render until layout has run and we have stable dimensions
@@ -369,11 +372,17 @@ class PeerMapCard(Static):
             self._blink_indices = set()
             self._render_map()
 
+    def set_network_node_count(self, count: int | None) -> None:
+        self._network_node_count = count
+        self._update_subtitle()
+
     def _update_subtitle(self) -> None:
+        parts: list[str] = []
         if self._total_count > 0:
-            self.border_subtitle = f"{self._mapped_count} of {self._total_count} mapped"
-        else:
-            self.border_subtitle = ""
+            parts.append(f"{self._mapped_count} of {self._total_count} mapped")
+        if self._network_node_count is not None and self._network_node_count > 0:
+            parts.append(f"{self._network_node_count} nodes on the network")
+        self.border_subtitle = " -- ".join(parts)
 
     def _get_map_dimensions(self) -> tuple[int, int]:
         """Get cols, rows from widget size. Uses inner size minus border/padding."""
@@ -996,6 +1005,7 @@ class LynxTuiApp(App):
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_map_center", "Map Offset"),
+        ("p", "share_status", "Share"),
     ]
 
     CSS = """
@@ -1577,6 +1587,11 @@ class LynxTuiApp(App):
         self.set_timer(2.5, lambda: self.set_interval(30, self.refresh_node_status_bar))
         self.set_timer(5.0, self._check_for_update)
         self.set_timer(5.0, lambda: self.set_interval(3600, self._check_for_update))
+        self.set_timer(3.0, self._refresh_network_node_count)
+        self.set_timer(3.0, lambda: self.set_interval(900, self._refresh_network_node_count))
+        self.set_timer(8.0, self._check_first_run_welcome)
+        self.set_timer(10.0, self._check_milestones)
+        self.set_timer(10.0, lambda: self.set_interval(60, self._check_milestones))
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -2540,6 +2555,214 @@ class LynxTuiApp(App):
         if disk_lines:
             storage_lines = disk_lines + storage_lines
         self.overview_storage.update_lines(storage_lines)
+
+    # --- Network node count (CryptoID) ---
+
+    @staticmethod
+    def _fetch_network_node_count() -> int | None:
+        import urllib.request, json as _json
+        try:
+            req = urllib.request.Request(CRYPTOID_NODES_URL)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read())
+            all_ips: set[str] = set()
+            for group in data:
+                for node in group.get("nodes", []):
+                    all_ips.add(node)
+            return len(all_ips) if all_ips else None
+        except Exception:
+            return None
+
+    async def _refresh_network_node_count(self) -> None:
+        count = await asyncio.get_event_loop().run_in_executor(
+            None, self._fetch_network_node_count
+        )
+        if count is not None:
+            self.peer_map.set_network_node_count(count)
+
+    # --- First-run welcome ---
+
+    async def _check_first_run_welcome(self) -> None:
+        marker = os.path.join(LYNX_WORKING_DIR, ".beacon-welcomed")
+        if os.path.exists(marker):
+            return
+        try:
+            info = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: self.rpc._safe_call("getblockchaininfo")
+            )
+            if not isinstance(info, dict):
+                return
+            is_ibd = info.get("initialblockdownload", False)
+            height = int(info.get("blocks", 99999))
+            if is_ibd and height < 1000:
+                self.notify(
+                    "Welcome to the Lynx Data Storage Network. Your node is "
+                    "syncing and will begin staking automatically. The more "
+                    "nodes on the network, the stronger it becomes.",
+                    severity="information",
+                    timeout=15,
+                )
+                try:
+                    os.makedirs(os.path.dirname(marker), exist_ok=True)
+                    with open(marker, "w") as f:
+                        f.write("1")
+                except OSError:
+                    pass
+        except Exception:
+            pass
+
+    # --- Share hotkey ---
+
+    async def action_share_status(self) -> None:
+        """Hotkey 'p': copy a shareable status line to the clipboard."""
+        location = ""
+        try:
+            tz = datetime.now().astimezone().tzname() or ""
+            if tz:
+                location = f" ({tz})"
+        except Exception:
+            pass
+
+        node_count = self.peer_map._network_node_count
+        count_part = ""
+        if node_count and node_count > 0:
+            count_part = f" -- {node_count} nodes strong"
+
+        text = (
+            f"I'm staking on the Lynx Data Storage Network{location}"
+            f"{count_part}. Join: beacon.getlynx.io"
+        )
+
+        copied = False
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "xclip", "-selection", "clipboard",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.communicate(text.encode())
+            if proc.returncode == 0:
+                copied = True
+        except FileNotFoundError:
+            pass
+
+        if not copied:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "xsel", "--clipboard", "--input",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await proc.communicate(text.encode())
+                if proc.returncode == 0:
+                    copied = True
+            except FileNotFoundError:
+                pass
+
+        if not copied:
+            osc52 = f"\033]52;c;{__import__('base64').b64encode(text.encode()).decode()}\a"
+            self.console.file.write(osc52)
+            self.console.file.flush()
+            copied = True
+
+        self.notify("Copied to clipboard!", severity="information", timeout=4)
+
+    # --- Milestone notifications ---
+
+    def _load_milestones(self) -> dict:
+        import json as _json
+        path = os.path.join(LYNX_WORKING_DIR, ".beacon-milestones.json")
+        try:
+            with open(path) as f:
+                return _json.load(f)
+        except Exception:
+            return {}
+
+    def _save_milestones(self, data: dict) -> None:
+        import json as _json
+        path = os.path.join(LYNX_WORKING_DIR, ".beacon-milestones.json")
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                _json.dump(data, f)
+        except OSError:
+            pass
+
+    async def _check_milestones(self) -> None:
+        loop = asyncio.get_event_loop()
+        try:
+            info = await loop.run_in_executor(
+                None, lambda: self.rpc._safe_call("getblockchaininfo")
+            )
+            if not isinstance(info, dict):
+                return
+        except Exception:
+            return
+
+        milestones = await loop.run_in_executor(None, self._load_milestones)
+        changed = False
+        height = int(info.get("blocks", 0))
+        is_ibd = info.get("initialblockdownload", False)
+
+        if "first_block" not in milestones and height > 0:
+            milestones["first_block"] = True
+            changed = True
+            self.notify(
+                "Your node just synced its first block!",
+                severity="information", timeout=8,
+            )
+
+        if "sync_complete" not in milestones and not is_ibd and height > 1000:
+            milestones["sync_complete"] = True
+            changed = True
+            self.notify(
+                "Sync complete -- your node is now fully operational.",
+                severity="information", timeout=10,
+            )
+
+        try:
+            staking_info = await loop.run_in_executor(
+                None, lambda: self.rpc._safe_call("getstakinginfo")
+            )
+            if isinstance(staking_info, dict):
+                weight = float(staking_info.get("weight", 0))
+                if "first_stake" not in milestones and weight > 0 and not is_ibd:
+                    milestones["first_stake"] = True
+                    changed = True
+                    self.notify(
+                        "You won your first stake! Your node is earning rewards.",
+                        severity="information", timeout=10,
+                    )
+        except Exception:
+            pass
+
+        try:
+            uptime_info = await loop.run_in_executor(
+                None, lambda: self.rpc._safe_call("uptime")
+            )
+            if isinstance(uptime_info, (int, float)):
+                uptime_secs = int(uptime_info)
+                if "uptime_24h" not in milestones and uptime_secs >= 86400:
+                    milestones["uptime_24h"] = True
+                    changed = True
+                    self.notify(
+                        "24 hours and counting -- your node is making the network stronger.",
+                        severity="information", timeout=8,
+                    )
+                if "uptime_7d" not in milestones and uptime_secs >= 604800:
+                    milestones["uptime_7d"] = True
+                    changed = True
+                    self.notify(
+                        "7 days running! You're a reliable part of the network.",
+                        severity="information", timeout=8,
+                    )
+        except Exception:
+            pass
+
+        if changed:
+            await loop.run_in_executor(None, lambda: self._save_milestones(milestones))
 
     # --- Auto-update ---
 

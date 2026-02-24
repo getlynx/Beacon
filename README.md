@@ -1,8 +1,25 @@
 # Beacon
 
-Full-screen terminal UI for managing a Lynx blockchain node. Built with Textual.
+Beacon is a terminal management console for the Lynx Data Storage Network. It
+gives stakers a single dashboard to monitor and control the blockchain projects
+that power the network -- starting with the Lynx blockchain and expanding to
+support up to nine chains on a single VPS or Raspberry Pi. This terminal user
+interface (TUI) is built with Textual.
 
-## Quick start
+![Beacon TUI](docs/images/beacon-screenshot.png)
+
+## Why run Beacon?
+
+Every node strengthens the Lynx Data Storage Network. By running Beacon you help
+secure the blockchain, keep the network decentralized, and earn staking rewards
+in the process. Those rewards can be sold on the open market to offset your VPS
+or energy costs -- turning a small server into a self-sustaining part of the
+infrastructure.
+
+Setup takes one command and about five minutes. No mining hardware, no high
+energy bills -- just a VPS or Raspberry Pi.
+
+## Join the network
 
 ```bash
 bash <(curl -sL beacon.getlynx.io)
@@ -26,6 +43,7 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 | `x` | Open send card |
 | `w` | Open sweep card |
 | `m` | Toggle map offset |
+| `p` | Copy a shareable status line to the clipboard |
 | `u` | Apply update (only visible when an update is available) |
 
 ## Auto-update
@@ -35,25 +53,13 @@ found, the header displays an update notice and the `u` key appears in the foote
 Press `u` to download and install the update, then `q` to quit and run `beacon`
 to restart with the new version.
 
-## Development / Manual install
+## Development
 
-On systems with PEP 668 (externally-managed-environment), use the auto-venv launcher:
+To run Beacon from the source code:
 
 ```bash
 cd Beacon
 ./run
-# or: python3 run
 ```
 
-This creates `.venv` and installs dependencies on first run, then starts the TUI. No manual venv activation needed.
-
-**Prerequisite (Debian/Ubuntu):** `apt install python3-venv`
-
-**Manual venv** (optional):
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-python -m beacon
-```
+This sets up the environment and starts the TUI. Dependencies are installed automatically on first run.
