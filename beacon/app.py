@@ -377,12 +377,11 @@ class PeerMapCard(Static):
         self._update_subtitle()
 
     def _update_subtitle(self) -> None:
-        parts: list[str] = []
-        if self._total_count > 0:
-            parts.append(f"{self._mapped_count} of {self._total_count} mapped")
-        if self._network_node_count is not None and self._network_node_count > 0:
-            parts.append(f"{self._network_node_count} nodes on the network")
-        self.border_subtitle = " -- ".join(parts)
+        total = self._network_node_count if self._network_node_count and self._network_node_count > 0 else self._total_count
+        if total > 0:
+            self.border_subtitle = f"{self._mapped_count} of {total} mapped"
+        else:
+            self.border_subtitle = ""
 
     def _get_map_dimensions(self) -> tuple[int, int]:
         """Get cols, rows from widget size. Uses inner size minus border/padding."""
@@ -2665,9 +2664,8 @@ class LynxTuiApp(App):
             osc52 = f"\033]52;c;{__import__('base64').b64encode(text.encode()).decode()}\a"
             self.console.file.write(osc52)
             self.console.file.flush()
-            copied = True
 
-        self.notify("Copied to clipboard!", severity="information", timeout=4)
+        self.notify(text, severity="information", timeout=10)
 
     # --- Milestone notifications ---
 
