@@ -2558,14 +2558,11 @@ class LynxTuiApp(App):
 
     def _sync_update_binding(self) -> None:
         """Show or hide the 'u' key in the footer based on update availability."""
-        has_binding = any(b.key == "u" for b in self._bindings.keys.values())
+        has_binding = "u" in self._bindings.key_to_bindings
         if self._update_available and not has_binding:
             self.bind("u", "apply_update", description="Update ⬆")
         elif not self._update_available and has_binding:
-            try:
-                self._bindings.keys.pop("u", None)
-            except Exception:
-                pass
+            self._bindings.key_to_bindings.pop("u", None)
         self.refresh_bindings()
 
     async def _check_for_update(self) -> None:
