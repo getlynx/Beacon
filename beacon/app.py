@@ -2475,12 +2475,13 @@ class LynxTuiApp(App):
         beacon_ver_display = f"v{BEACON_VERSION}"
         if self._update_available:
             beacon_ver_display += f" (v{self._update_available} available)"
+        daemon_label = self._node_name or "Daemon"
         daemon_status_lines = [
-            f"Lynx Uptime  {uptime_display}",
-            f"Version      {daemon_version}",
-            f"Beacon       {beacon_ver_display}",
-            f"Sync monitor {data['sync_monitor']}",
-            f"Tenant       unregistered",
+            f"Daemon Uptime    {uptime_display}",
+            f"{daemon_label:<16} {daemon_version}",
+            f"Beacon           {beacon_ver_display}",
+            f"Historical Sync  {data['sync_monitor']}",
+            f"Tenant           unregistered",
         ]
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
         self._schedule_update(0.4, lambda: self.overview_daemon_status.update_lines(daemon_status_lines))
