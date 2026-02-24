@@ -1000,15 +1000,21 @@ class ShareCard(Static):
         yield self._content
 
     def refresh_message(self, node_count: int | None = None) -> None:
-        count_part = ""
+        count_line = ""
         if node_count and node_count > 0:
-            count_part = f" -- {node_count} nodes strong"
-        text = (
-            f"I'm staking on the Lynx Data Storage Network"
-            f"{count_part}. Join: beacon.getlynx.io"
-        )
+            count_line = f"\n\nThe network is {node_count} nodes strong."
         self._content.update(
-            f"Copy and share with your friends:\n\n  {text}"
+            "Help grow the network!\n"
+            "Share this with a friend:\n"
+            "\n"
+            "  I'm staking on the Lynx Data\n"
+            "  Storage Network and earning\n"
+            "  rewards. Set up your own node\n"
+            "  in about 5 minutes on any VPS\n"
+            "  or Raspberry Pi.\n"
+            "\n"
+            "  github.com/getlynx/Beacon"
+            f"{count_line}"
         )
 
 
@@ -1289,8 +1295,9 @@ class LynxTuiApp(App):
     }
     #share-card-settings {
         width: 50;
-        height: 7;
-        margin-top: 1;
+        height: 22;
+        margin-top: 0;
+        margin-left: 2;
         border: solid $primary-darken-2;
         padding: 1 2;
     }
@@ -1582,7 +1589,7 @@ class LynxTuiApp(App):
                         with Container(id="settings-row"):
                             yield self.timezone_card
                             yield self.currency_card
-                        yield self.share_card
+                            yield self.share_card
         yield self.status_bar
         yield Footer()
 
