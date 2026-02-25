@@ -1,5 +1,6 @@
 import asyncio
 import os
+import platform
 import re
 import subprocess
 import time
@@ -2347,12 +2348,25 @@ class LynxTuiApp(App):
 
         daemon_version = self._node_version or "-"
 
+        os_uptime = sys_stats.get('uptime', '-')
+        _machine = platform.machine()
+        _arch_map = {
+            "x86_64": "AMD64",
+            "aarch64": "ARM64",
+            "armv7l": "ARM",
+            "armv6l": "ARM",
+            "riscv64": "RISC-V",
+        }
+        arch_display = _arch_map.get(_machine, _machine)
         system_overview_lines = [
-            f"CPU      {cpu_pct:.1f}% cores {cpu_cores}",
+            f"Arch     {arch_display}",
+            f"CPU      {cpu_pct:.1f}%",
+            f"Cores    {cpu_cores}",
             f"Load     {load_avg[0]:.2f} {load_avg[1]:.2f} {load_avg[2]:.2f}",
             f"Memory   {mem_pct:.2f}%  {mem_used:.2f}GB/{mem_total:.0f}GB",
             f"Swap     {swap_used:.2f}GB/{swap_total:.0f}GB",
             f"Network  Dn {sys_stats.get('network_down_kb', 0):.2f}KB  Up {sys_stats.get('network_up_kb', 0):.2f}KB",
+            f"Uptime   {os_uptime}",
         ]
         
         # Get wallet balance for pricing calculations
@@ -2476,12 +2490,14 @@ class LynxTuiApp(App):
         if self._update_available:
             beacon_ver_display += f" (v{self._update_available} available)"
         daemon_label = self._node_name or "Daemon"
+        ibd_status = "syncing" if data['sync_monitor'] == "active" else "complete"
+        col = 24
         daemon_status_lines = [
-            f"Uptime    {uptime_display}",
-            f"{daemon_label:<16} {daemon_version}",
-            f"Beacon           {beacon_ver_display}",
-            f"Network Sync  {data['sync_monitor']}",
-            f"Tenant           unregistered",
+            f"{daemon_label + ' Uptime':<{col}} {uptime_display}",
+            f"{daemon_label + ' Version':<{col}} {daemon_version}",
+            f"{'Beacon Version':<{col}} {beacon_ver_display}",
+            f"{'Initial Block Sync':<{col}} {ibd_status}",
+            f"{'Tenant Status':<{col}} unregistered",
         ]
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
         self._schedule_update(0.4, lambda: self.overview_daemon_status.update_lines(daemon_status_lines))
