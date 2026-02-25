@@ -129,6 +129,45 @@ EOF
   chown "$target_user":"$target_user" "$bashrc" 2>/dev/null || true
 }
  
+ensure_swap() {
+  local current_swap
+  current_swap=$(free -m | awk '/^Swap:/ {print $2}')
+  if [ "$current_swap" -ge 3072 ] 2>/dev/null; then
+    echo "Swap is ${current_swap}MB (sufficient). Skipping."
+    return 0
+  fi
+  echo "Swap is ${current_swap}MB. Expanding to 4GB..."
+
+  if ! command -v mkswap >/dev/null 2>&1; then
+    echo "mkswap not found. Skipping swap expansion."
+    return 0
+  fi
+
+  if [ "$current_swap" -gt 0 ]; then
+    local swap_dev
+    swap_dev=$(tail -n1 /proc/swaps | awk '{print $1}')
+    swapoff "$swap_dev" 2>/dev/null || true
+    sed -i '/swap/d' /etc/fstab 2>/dev/null || true
+  fi
+
+  if command -v fallocate >/dev/null 2>&1; then
+    fallocate -l 4G /swapfile 2>/dev/null
+  fi
+  if [ ! -f /swapfile ] || [ "$(stat -c%s /swapfile 2>/dev/null)" -lt 4000000000 ]; then
+    dd if=/dev/zero of=/swapfile bs=1M count=4096 2>/dev/null || {
+      echo "Could not create swapfile. Skipping."
+      rm -f /swapfile
+      return 0
+    }
+  fi
+
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null 2>&1 || { echo "mkswap failed. Skipping."; rm -f /swapfile; return 0; }
+  swapon /swapfile 2>/dev/null || { echo "swapon failed. Skipping."; rm -f /swapfile; return 0; }
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab 2>/dev/null || true
+  echo "Swap expanded to 4GB."
+}
+
 ensure_working_dir() {
   mkdir -p "$WORKING_DIR"
   chmod 755 "$WORKING_DIR"
@@ -264,6 +303,7 @@ EOF
    require_root
    detect_os
    install_packages
+  ensure_swap
   ensure_working_dir
   install_lynx_binary
   install_lynx_service
