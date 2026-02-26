@@ -1154,7 +1154,7 @@ class LynxTuiApp(App):
     }
     #overview-network,
     #overview-peers {
-        min-height: 20;
+        min-height: 18;
         height: 1fr;
         overflow-x: hidden;
         scrollbar-visibility: visible;
@@ -1167,7 +1167,7 @@ class LynxTuiApp(App):
         max-height: 9;
     }
     #overview-addresses {
-        min-height: 8;
+        min-height: 6;
         height: 1fr;
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
@@ -1419,7 +1419,8 @@ class LynxTuiApp(App):
         try:
             _osrel = platform.freedesktop_os_release()
             _pretty = _osrel.get("PRETTY_NAME") or _osrel.get("NAME") or "Unknown"
-            self._os_name = re.sub(r"\s*GNU/Linux\s*", " ", _pretty).strip()
+            _cleaned = re.sub(r"\s*GNU/Linux\s*", " ", _pretty).strip()
+            self._os_name = re.sub(r"\s*\([^)]*\)", "", _cleaned).strip()
         except Exception:
             self._os_name = f"{platform.system()} {platform.release()}".strip() or "Unknown"
         self.title = "...loading Beacon for the Lynx Data Storage Network"
@@ -2496,13 +2497,13 @@ class LynxTuiApp(App):
         if self._update_available:
             beacon_ver_display += f" (v{self._update_available} available)"
         daemon_label = self._node_name or "Daemon"
-        ibd_status = "syncing" if data['sync_monitor'] == "active" else "complete"
-        col = 20
+        ibd_status = "Syncing" if data['sync_monitor'] == "active" else "Synced"
+        col = 18
         daemon_status_lines = [
             f"{daemon_label + ' Uptime':<{col}} {uptime_display}",
             f"{daemon_label + ' Version':<{col}} {daemon_version}",
             f"{'Beacon Version':<{col}} {beacon_ver_display}",
-            f"{'Initial Block Sync':<{col}} {ibd_status}",
+            f"{'Initial Block':<{col}} {ibd_status}",
             f"{'Tenant Status':<{col}} unregistered",
             f"{'Operating System':<{col}} {self._os_name}",
         ]

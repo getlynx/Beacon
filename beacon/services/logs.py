@@ -45,7 +45,8 @@ class LogTailer:
         hash_re = re.compile(r"(?:best|hash)=([0-9a-fA-F]{8,64})")
         fallback_hash_re = re.compile(r"\b([0-9a-fA-F]{8,64})\b")
         tx_re = re.compile(r"\btx=(\d+)\b")
-        date_re = re.compile(r"\bdate=(\S+)")
+        # Matches date='2026-02-26 03:24:35' (quoted with space) or date=2026-02-26T03:24:35Z (ISO)
+        date_re = re.compile(r"\bdate='([^']+)'|\bdate=(\S+)")
 
         for line in reversed(lines):
             if "UpdateTip" not in line:
@@ -57,7 +58,10 @@ class LogTailer:
             hash_short = hash_value[:4] if hash_value != "-" else "-"
 
             date_match = date_re.search(line)
-            timestamp = date_match.group(1) if date_match else line.split(" ", 1)[0]
+            if date_match:
+                timestamp = (date_match.group(1) or date_match.group(2) or "").strip()
+            else:
+                timestamp = line.split(" ", 1)[0]
             time_display = timestamp.replace("T", " ")
             parsed_time: datetime | None = None
             try:
