@@ -1133,11 +1133,11 @@ class FirewallCard(VerticalScroll):
             "Disable Firewall" if status == "active" else "Enable Firewall"
         )
 
-        # Fixed ports
+        # Fixed ports  (escape brackets so Rich doesn't treat them as markup tags)
         fixed_text = ""
         for port in ssh_ports:
-            fixed_text += f"  SSH          {port:<6}  TCP    [locked]\n"
-        fixed_text += f"  Lynx P2P     {fw_service.LYNX_P2P_PORT:<6}  TCP    [locked]"
+            fixed_text += f"  SSH          {port:<6}  TCP    \\[locked]\n"
+        fixed_text += f"  Lynx P2P     {fw_service.LYNX_P2P_PORT:<6}  TCP    \\[locked]"
         self._fixed_lines.update(fixed_text)
 
         # Optional ports — update pre-created widgets in-place (no mount/remove needed)
@@ -1146,7 +1146,7 @@ class FirewallCard(VerticalScroll):
             label = opt["label"]
             enabled = fw_service.get_optional_port_enabled(p)
             state_label = "enabled" if enabled else "disabled"
-            self._opt_info[p].update(f"  {label:<14} {p:<6}  TCP    [{state_label}]")
+            self._opt_info[p].update(f"  {label:<14} {p:<6}  TCP    \\[{state_label}]")
             self._opt_enable[p].disabled = enabled
             self._opt_disable[p].disabled = not enabled
 
@@ -1499,13 +1499,13 @@ class LynxTuiApp(App):
     }
     .firewall-opt-row {
         layout: horizontal;
-        height: auto;
+        height: 3;
         align-vertical: middle;
     }
     .firewall-opt-btn {
         width: auto;
         min-width: 9;
-        height: 1;
+        height: 3;
         margin-left: 1;
     }
     #timezone-select {
