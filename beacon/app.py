@@ -2225,6 +2225,7 @@ class LynxTuiApp(App):
             self.refresh_timezone_list(),
             self.refresh_timezone(),
             self.refresh_storage_capacity(),
+            self._check_for_update(),
         )
         self.timezone_status.update("Refresh complete.")
 
