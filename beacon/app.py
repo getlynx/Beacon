@@ -37,6 +37,23 @@ INSTALL_ROOT = "/usr/local/beacon"
 CRYPTOID_NODES_URL = "https://chainz.cryptoid.info/lynx/api.dws?q=nodes"
 LYNX_WORKING_DIR = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
 
+
+def _use_emoji() -> bool:
+    """Return True if the terminal likely supports emoji glyphs."""
+    term = os.environ.get("TERM", "")
+    if term == "linux":
+        return False
+    return True
+
+
+_EMOJI = _use_emoji()
+
+
+def E(emoji: str, fallback: str = "") -> str:
+    """Return emoji if supported, otherwise an ASCII fallback."""
+    return emoji if _EMOJI else fallback
+
+
 # PoS difficulty chart: number of blocks to display (backfill fetches this many)
 DIFFICULTY_BLOCK_COUNT = 100
 
@@ -158,25 +175,25 @@ class CustomHeader(Static):
         if hasattr(self.app, 'status_bar') and self.app.status_bar:
             node_status = self.app.status_bar.node_status
         if node_status == "running":
-            status_emoji = "🟢"
+            status_emoji = E("🟢", "*")
             display = "Online"
         elif node_status == "refreshing":
-            status_emoji = "⏳"
+            status_emoji = E("⏳", "~")
             display = "Checking..."
         else:
-            status_emoji = "🔴"
+            status_emoji = E("🔴", "x")
             display = "Daemon starting or offline"
         node_status_str = f"{status_emoji} Node Status: {display} "
 
         update_str = ""
         if hasattr(self.app, '_update_available') and self.app._update_available:
-            update_str = f"⬆ v{self.app._update_available} available (u) "
+            update_str = f"{E('⬆', '^')} v{self.app._update_available} available (u) "
         
         indicator_emoji = {
-            "green": "🟢",
-            "yellow": "🟡",
-            "blue": "🔵"
-        }.get(self.indicator_state, "🟢")
+            "green": E("🟢", "*"),
+            "yellow": E("🟡", "~"),
+            "blue": E("🔵", "o"),
+        }.get(self.indicator_state, E("🟢", "*"))
         
         try:
             width = self.size.width
@@ -325,7 +342,7 @@ class PeerMapCard(Static):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(markup=False, **kwargs)
-        self.border_title = "🌍 Peer Map"
+        self.border_title = f"{E('🌍', '*')} Peer Map"
         self.border_subtitle = ""
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
@@ -471,7 +488,7 @@ class DifficultyChartPanel(Container):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "🔗 Proof of Stake Difficulty"
+        self.border_title = f"{E('🔗', '#')} Proof of Stake Difficulty"
         self.border_subtitle = f"0 of {DIFFICULTY_BLOCK_COUNT} latest blocks (newest on left)"
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
@@ -726,7 +743,7 @@ class AddressListPanel(VerticalScroll):
         daemon_status: str = "unknown",
     ) -> None:
         if address_count is not None:
-            self.border_title = f"💼 Addresses ({address_count})"
+            self.border_title = f"{E('💼', '>')} Addresses ({address_count})"
         else:
             self.border_title = self.title
         if isinstance(wallet_balance, (int, float)):
@@ -874,7 +891,7 @@ class SendCard(VerticalScroll):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "💸 Send"
+        self.border_title = f"{E('💸', '>')} Send"
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
@@ -927,7 +944,7 @@ class SweepCard(VerticalScroll):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "🧹 Sweep"
+        self.border_title = f"{E('🧹', '>')} Sweep"
         self.border_title_align = ("left", "top")
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
@@ -1020,7 +1037,7 @@ class ShareCard(Static):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "📣 Share"
+        self.border_title = f"{E('📣', '>')} Share"
         self.border_title_align = ("left", "top")
         self.add_class("card")
         self._content = Static("", classes="share-content")
@@ -1066,7 +1083,7 @@ class MissionCard(Static):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "\U0001f4dc Mission"
+        self.border_title = f"{E(chr(0x1f4dc), '>')} Mission"
         self.border_title_align = ("left", "top")
         self.add_class("card")
         self._content = Static(self.MISSION_TEXT, classes="mission-content")
@@ -1080,7 +1097,7 @@ class FirewallCard(VerticalScroll):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.border_title = "🔥 Firewall"
+        self.border_title = f"{E('🔥', '>')} Firewall"
         self.add_class("card")
         self._status_line = Static("", id="firewall-status-line")
         self._ssh_line = Static("", id="firewall-ssh-line")
@@ -1156,7 +1173,7 @@ class FirewallCard(VerticalScroll):
 
         # Pre-existing rules warning (only relevant when inactive, about to enable)
         if status != "active" and fw_service.get_has_existing_rules():
-            self._warning_line.update("⚠  Enabling will reset existing firewall rules.")
+            self._warning_line.update(f"{E('⚠', '!')}  Enabling will reset existing firewall rules.")
             self._warning_line.display = True
         else:
             self._warning_line.display = False
@@ -1631,14 +1648,14 @@ class LynxTuiApp(App):
             self._os_name = f"{platform.system()} {platform.release()}".strip() or "Unknown"
         self.title = "...loading Beacon for the Lynx Data Storage Network"
 
-        self.node_status_card = StakingPanel("🏆 Staking", "staking", id="overview-node-status")
+        self.node_status_card = StakingPanel(f"{E('🏆', '>')} Staking", "staking", id="overview-node-status")
         self.overview_network = NetworkActivityPanel(
-            "📡 Network Activity", "activity", id="overview-network"
+            f"{E('📡', '>')} Network Activity", "activity", id="overview-network"
         )
         self.overview_network.add_class("wide")
-        self.overview_peers = PeerListPanel("🌐 Peers", "network", id="overview-peers")
+        self.overview_peers = PeerListPanel(f"{E('🌐', '*')} Peers", "network", id="overview-peers")
         self.overview_addresses = AddressListPanel(
-            "💼 Addresses", "wallet", id="overview-addresses"
+            f"{E('💼', '>')} Addresses", "wallet", id="overview-addresses"
         )
         self.difficulty_chart = DifficultyChartPanel(id="difficulty-chart")
         self.send_card = SendCard(id="send-card")
@@ -1647,19 +1664,19 @@ class LynxTuiApp(App):
         self.sweep_card.display = False  # Hidden by default, press w to show
         self._difficulty_backfill_index = 0
         self._difficulty_backfill_timer = None
-        self.overview_mempool = MemPoolPanel("📋 Memory Pool", "sync", id="overview-mempool")
-        self.overview_system = CardPanel("💻 System Utilization", "node", alternating_rows=True, id="overview-system")
-        self.overview_daemon_status = CardPanel("🟢 Daemon Status", "node", alternating_rows=True, id="overview-daemon-status")
-        self.overview_pricing = CardPanel("💰 Pricing", "pricing", alternating_rows=True, id="overview-pricing")
-        self.overview_value = CardPanel("💵 Value", "pricing", alternating_rows=True, id="overview-value")
+        self.overview_mempool = MemPoolPanel(f"{E('📋', '>')} Memory Pool", "sync", id="overview-mempool")
+        self.overview_system = CardPanel(f"{E('💻', '>')} System Utilization", "node", alternating_rows=True, id="overview-system")
+        self.overview_daemon_status = CardPanel(f"{E('🟢', '*')} Daemon Status", "node", alternating_rows=True, id="overview-daemon-status")
+        self.overview_pricing = CardPanel(f"{E('💰', '$')} Pricing", "pricing", alternating_rows=True, id="overview-pricing")
+        self.overview_value = CardPanel(f"{E('💵', '$')} Value", "pricing", alternating_rows=True, id="overview-value")
         self.overview_storage = StorageCapabilityPanel(
-            "💾 Storage Capability", "node", id="overview-storage"
+            f"{E('💾', '>')} Storage Capability", "node", id="overview-storage"
         )
         self.peer_map = PeerMapCard(id="map-peer-map")
         self.geo_cache = GeoCache()
 
         self.block_stats_card = BlockStatsPanel(
-            "🧱 Block Statistics", "sync", id="overview-block-stats"
+            f"{E('🧱', '#')} Block Statistics", "sync", id="overview-block-stats"
         )
         self.status_bar = StatusBar()
         self.timezone_select = SelectionList(id="timezone-select")
@@ -3139,7 +3156,7 @@ class LynxTuiApp(App):
         """Show or hide the 'u' key in the footer based on update availability."""
         has_binding = "u" in self._bindings.key_to_bindings
         if self._update_available and not has_binding:
-            self.bind("u", "apply_update", description="Update ⬆")
+            self.bind("u", "apply_update", description=f"Update {E('⬆', '^')}")
         elif not self._update_available and has_binding:
             self._bindings.key_to_bindings.pop("u", None)
         self.refresh_bindings()
