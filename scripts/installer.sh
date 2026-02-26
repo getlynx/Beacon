@@ -33,12 +33,12 @@ LYNX_REPO="getlynx/Lynx"
    if [ "$OS_FAMILY" = "debian" ]; then
      apt-get update -y
      PYVER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.11")
-     apt-get install -y python3 python3-venv python3-pip "python${PYVER}-venv" "python${PYVER}-full" curl htop iptables unzip
+     apt-get install -y python3 python3-venv python3-pip "python${PYVER}-venv" "python${PYVER}-full" curl htop iptables unzip ufw
    elif [ "$OS_FAMILY" = "redhat" ]; then
-     if command -v dnf >/dev/null 2>&1; then
-      dnf install -y python3 python3-pip python3-virtualenv curl htop iptables unzip
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y python3 python3-pip python3-virtualenv curl htop iptables unzip firewalld
      else
-      yum install -y python3 python3-pip python3-virtualenv curl htop iptables unzip
+      yum install -y python3 python3-pip python3-virtualenv curl htop iptables unzip firewalld
      fi
    else
      echo "Unsupported OS family. Install python3 and pip manually."

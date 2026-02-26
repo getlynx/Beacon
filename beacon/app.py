@@ -29,6 +29,7 @@ from beacon.services.logs import LogTailer
 from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
 from beacon.services.system import SystemClient
+import beacon.services.firewall as fw_service
 
 BEACON_REPO = "getlynx/Beacon"
 BEACON_TARBALL_URL = "https://github.com/getlynx/Beacon/releases/latest/download/beacon.tar.gz"
@@ -1046,6 +1047,114 @@ class ShareCard(Static):
         )
 
 
+class FirewallCard(VerticalScroll):
+    """Settings card for managing the system firewall (UFW / firewalld)."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = "🔥 Firewall"
+        self.add_class("card")
+        self._status_line = Static("", id="firewall-status-line")
+        self._ssh_line = Static("", id="firewall-ssh-line")
+        self._warning_line = Static("", id="firewall-existing-rules-warning")
+        self._toggle_btn = Button("Enable Firewall", id="firewall-toggle")
+        self._fixed_lines = Static("", id="firewall-fixed-ports")
+        self._optional_container = Container(id="firewall-optional-ports")
+        self._unavailable_line = Static("", id="firewall-unavailable")
+
+    def compose(self) -> ComposeResult:
+        yield self._unavailable_line
+        yield self._status_line
+        yield self._ssh_line
+        yield self._warning_line
+        yield self._toggle_btn
+        yield Static("", id="firewall-spacer1")
+        yield Static("Fixed ports (always open):", id="firewall-fixed-heading")
+        yield self._fixed_lines
+        yield Static("", id="firewall-spacer2")
+        yield Static("Optional ports:", id="firewall-optional-heading")
+        yield self._optional_container
+
+    def refresh_state(self) -> None:
+        backend = fw_service.get_backend()
+        if backend == "none":
+            self._unavailable_line.update(
+                "No firewall backend available.\nRun the installer to enable firewall support."
+            )
+            self._status_line.display = False
+            self._ssh_line.display = False
+            self._warning_line.display = False
+            self._toggle_btn.display = False
+            self.query_one("#firewall-fixed-heading", Static).display = False
+            self._fixed_lines.display = False
+            self.query_one("#firewall-spacer2", Static).display = False
+            self.query_one("#firewall-optional-heading", Static).display = False
+            self._optional_container.display = False
+            return
+
+        self._unavailable_line.display = False
+        status = fw_service.get_status()
+        ssh_ports = fw_service.get_ssh_ports()
+        prefs = fw_service.load_prefs()
+
+        # Status line
+        status_label = "ACTIVE" if status == "active" else "INACTIVE"
+        self._status_line.update(f"Status: {status_label}   Backend: {backend}")
+
+        # SSH port line
+        ports_str = ", ".join(str(p) for p in ssh_ports)
+        self._ssh_line.update(f"Detected SSH port(s): {ports_str}")
+
+        # Pre-existing rules warning (only relevant when inactive, about to enable)
+        if status != "active" and fw_service.get_has_existing_rules():
+            self._warning_line.update(
+                "⚠  Enabling will reset existing firewall rules."
+            )
+            self._warning_line.display = True
+        else:
+            self._warning_line.display = False
+
+        # Toggle button label
+        self._toggle_btn.label = (
+            "Disable Firewall" if status == "active" else "Enable Firewall"
+        )
+
+        # Fixed ports
+        fixed_text = ""
+        for port in ssh_ports:
+            fixed_text += f"  SSH          {port:<6}  TCP    [locked]\n"
+        fixed_text += f"  Lynx P2P     {fw_service.LYNX_P2P_PORT:<6}  TCP    [locked]"
+        self._fixed_lines.update(fixed_text)
+
+        # Optional ports — rebuild buttons
+        self._optional_container.remove_children()
+        for opt in fw_service.OPTIONAL_PORTS:
+            port = opt["port"]
+            label = opt["label"]
+            enabled = fw_service.get_optional_port_enabled(port)
+            state_label = "enabled" if enabled else "disabled"
+            row = Container(id=f"firewall-opt-row-{port}", classes="firewall-opt-row")
+            info = Static(
+                f"  {label:<14} {port:<6}  TCP    [{state_label}]",
+                id=f"firewall-opt-info-{port}",
+            )
+            enable_btn = Button("Enable", id=f"port-enable-{port}", classes="firewall-opt-btn")
+            disable_btn = Button("Disable", id=f"port-disable-{port}", classes="firewall-opt-btn")
+            enable_btn.disabled = enabled
+            disable_btn.disabled = not enabled
+            row._nodes_to_add = [info, enable_btn, disable_btn]  # type: ignore[attr-defined]
+            self._optional_container.mount(row)
+            row.mount(info)
+            row.mount(enable_btn)
+            row.mount(disable_btn)
+
+        # Note about monitoring
+        self.query_one("#firewall-optional-heading", Static).update(
+            "Optional ports:\n"
+            + ("  (SSH port monitored every 30s while Beacon is running)" if status == "active" else "")
+        )
+
+
 # All built-in themes + custom themes for cycle
 THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
     "beacon-high-contrast-dark",
@@ -1341,6 +1450,62 @@ class LynxTuiApp(App):
     .share-content {
         text-align: center;
     }
+    #settings-row-2 {
+        layout: horizontal;
+        height: auto;
+        margin-top: 1;
+    }
+    #firewall-card {
+        width: 70;
+        height: 22;
+    }
+    #firewall-status-line {
+        padding-left: 1;
+        height: auto;
+    }
+    #firewall-ssh-line {
+        padding-left: 1;
+        height: auto;
+    }
+    #firewall-existing-rules-warning {
+        padding-left: 1;
+        height: auto;
+        color: $warning;
+    }
+    #firewall-unavailable {
+        padding-left: 1;
+        height: auto;
+        color: $error;
+    }
+    #firewall-spacer1,
+    #firewall-spacer2 {
+        height: 1;
+    }
+    #firewall-fixed-heading,
+    #firewall-optional-heading {
+        padding-left: 1;
+        height: auto;
+        color: $primary;
+    }
+    #firewall-fixed-ports {
+        padding-left: 0;
+        height: auto;
+    }
+    #firewall-optional-ports {
+        height: auto;
+        layout: vertical;
+    }
+    .firewall-opt-row {
+        layout: horizontal;
+        height: auto;
+        align-vertical: middle;
+    }
+    .firewall-opt-btn {
+        width: auto;
+        min-width: 9;
+        height: 1;
+        margin-left: 1;
+    }
     #timezone-select {
         width: 1fr;
         height: 12;
@@ -1477,6 +1642,8 @@ class LynxTuiApp(App):
             id="currency-card",
         )
         self.share_card = ShareCard(id="share-card-settings")
+        self.firewall_card = FirewallCard(id="firewall-card")
+        self._cached_ssh_ports: list[int] = []
         self._currency = "USD"
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
@@ -1637,6 +1804,8 @@ class LynxTuiApp(App):
                             yield self.timezone_card
                             yield self.currency_card
                             yield self.share_card
+                        with Container(id="settings-row-2"):
+                            yield self.firewall_card
         yield self.status_bar
         yield Footer()
 
@@ -1680,6 +1849,8 @@ class LynxTuiApp(App):
         self.set_timer(8.0, self._check_first_run_welcome)
         self.set_timer(10.0, self._check_milestones)
         self.set_timer(10.0, lambda: self.set_interval(60, self._check_milestones))
+        self.set_timer(1.0, self._init_firewall_card)
+        self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -1880,10 +2051,28 @@ class LynxTuiApp(App):
             self.notify(msg, title="Sweep failed", severity="error")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "send-button":
+        btn_id = event.button.id or ""
+
+        # Firewall toggle
+        if btn_id == "firewall-toggle":
+            await self._handle_firewall_toggle()
+            return
+
+        # Optional port enable/disable
+        if btn_id.startswith("port-enable-") or btn_id.startswith("port-disable-"):
+            parts = btn_id.split("-")
+            try:
+                port = int(parts[-1])
+                enabled = btn_id.startswith("port-enable-")
+                await self._handle_firewall_port(port, enabled)
+            except (ValueError, IndexError):
+                pass
+            return
+
+        if btn_id == "send-button":
             await self._handle_send()
             return
-        if event.button.id == "sweep-button":
+        if btn_id == "sweep-button":
             await self._handle_sweep()
             return
         if event.button.id == "currency-apply":
@@ -1918,6 +2107,73 @@ class LynxTuiApp(App):
             time.tzset()
             # Refresh displays to show new timezone
             await self.refresh_timezone()
+
+    async def _init_firewall_card(self) -> None:
+        """Initialize the firewall card state and cache SSH ports."""
+        self._cached_ssh_ports = await asyncio.get_event_loop().run_in_executor(
+            None, fw_service.get_ssh_ports
+        )
+        self.firewall_card.refresh_state()
+
+    async def _handle_firewall_toggle(self) -> None:
+        """Enable or disable the firewall based on current state."""
+        status = await asyncio.get_event_loop().run_in_executor(
+            None, fw_service.get_status
+        )
+        if status == "active":
+            ok, msg = await asyncio.get_event_loop().run_in_executor(
+                None, fw_service.disable_firewall
+            )
+            title = "Firewall disabled" if ok else "Firewall error"
+            severity = "information" if ok else "error"
+        else:
+            ok, msg = await asyncio.get_event_loop().run_in_executor(
+                None, fw_service.enable_firewall
+            )
+            title = "Firewall enabled" if ok else "Firewall error"
+            severity = "information" if ok else "error"
+        self.notify(msg, title=title, severity=severity, timeout=5)
+        self.firewall_card.refresh_state()
+
+    async def _handle_firewall_port(self, port: int, enabled: bool) -> None:
+        """Toggle an optional firewall port."""
+        ok, msg = await asyncio.get_event_loop().run_in_executor(
+            None, fw_service.set_optional_port, port, enabled
+        )
+        if not ok:
+            self.notify(msg, title="Firewall error", severity="error", timeout=5)
+        self.firewall_card.refresh_state()
+
+    async def _monitor_ssh_port(self) -> None:
+        """Poll sshd_config every 30s; rebuild firewall rules if SSH port changed."""
+        status = await asyncio.get_event_loop().run_in_executor(
+            None, fw_service.get_status
+        )
+        if status != "active":
+            return
+        new_ports = await asyncio.get_event_loop().run_in_executor(
+            None, fw_service.get_ssh_ports
+        )
+        if sorted(new_ports) != sorted(self._cached_ssh_ports):
+            ok, msg = await asyncio.get_event_loop().run_in_executor(
+                None, fw_service.enable_firewall
+            )
+            ports_str = ", ".join(str(p) for p in new_ports)
+            if ok:
+                self.notify(
+                    f"SSH port changed to {ports_str} — firewall rules updated.",
+                    title="Firewall",
+                    timeout=8,
+                )
+            else:
+                self.notify(
+                    f"SSH port changed but firewall update failed: {msg}",
+                    title="Firewall warning",
+                    severity="warning",
+                    timeout=8,
+                )
+            self._cached_ssh_ports = new_ports
+            self.firewall_card.refresh_state()
 
     async def action_refresh_all(self) -> None:
         self.header.set_indicator("blue")
