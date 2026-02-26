@@ -1047,6 +1047,34 @@ class ShareCard(Static):
         )
 
 
+class MissionCard(Static):
+    """Settings card displaying the project mission statement."""
+
+    MISSION_TEXT = (
+        "Digital preservation means ensuring that\n"
+        "information remains accessible not for years,\n"
+        "but for centuries.\n"
+        "\n"
+        "By running this node, you are an active\n"
+        "participant in that mission.\n"
+        "\n"
+        "The Lynx Data Storage Network is designed\n"
+        "to store data for a minimum of 500 years —\n"
+        "reliably, affordably, and on the least\n"
+        "expensive hardware available."
+    )
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = "\U0001f4dc Mission"
+        self.border_title_align = ("left", "top")
+        self.add_class("card")
+        self._content = Static(self.MISSION_TEXT, classes="mission-content")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+
 class FirewallCard(VerticalScroll):
     """Settings card for managing the system firewall (UFW / firewalld)."""
 
@@ -1429,27 +1457,24 @@ class LynxTuiApp(App):
         border: solid $primary-darken-2;
     }
     #settings {
-        layout: vertical;
+        layout: grid;
+        grid-size: 4;
+        grid-gutter: 1 2;
         padding: 1 2;
-    }
-    #settings-row {
-        layout: horizontal;
-        height: auto;
+        height: 1fr;
+        width: 1fr;
     }
     #timezone-card {
-        width: 50;
+        width: 1fr;
         height: 22;
-        margin-right: 2;
     }
     #currency-card {
-        width: 50;
+        width: 1fr;
         height: 22;
     }
     #share-card-settings {
-        width: 50;
+        width: 1fr;
         height: 22;
-        margin-top: 0;
-        margin-left: 2;
         border: solid $primary-darken-2;
         padding: 3 4;
         content-align: center middle;
@@ -1457,13 +1482,18 @@ class LynxTuiApp(App):
     .share-content {
         text-align: center;
     }
-    #settings-row-2 {
-        layout: horizontal;
-        height: auto;
-        margin-top: 1;
+    #mission-card {
+        width: 1fr;
+        height: 22;
+        border: solid $primary-darken-2;
+        padding: 3 4;
+        content-align: center middle;
+    }
+    .mission-content {
+        text-align: center;
     }
     #firewall-card {
-        width: 70;
+        width: 1fr;
         height: 26;
     }
     #firewall-status-line {
@@ -1653,6 +1683,7 @@ class LynxTuiApp(App):
             id="currency-card",
         )
         self.share_card = ShareCard(id="share-card-settings")
+        self.mission_card = MissionCard(id="mission-card")
         self.firewall_card = FirewallCard(id="firewall-card")
         self._cached_ssh_ports: list[int] = []
         self._currency = "USD"
@@ -1811,12 +1842,11 @@ class LynxTuiApp(App):
                             yield self.overview_storage
                 with TabPane("Settings"):
                     with Container(id="settings"):
-                        with Container(id="settings-row"):
-                            yield self.timezone_card
-                            yield self.currency_card
-                            yield self.share_card
-                        with Container(id="settings-row-2"):
-                            yield self.firewall_card
+                        yield self.timezone_card
+                        yield self.currency_card
+                        yield self.share_card
+                        yield self.mission_card
+                        yield self.firewall_card
         yield self.status_bar
         yield Footer()
 
