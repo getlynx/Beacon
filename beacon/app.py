@@ -1088,7 +1088,7 @@ class LynxTuiApp(App):
         layout: grid;
         grid-size: 6;
         grid-gutter: 0 1;
-        grid-rows: 22 auto 1fr 1fr 1fr;
+        grid-rows: 25 auto 1fr 1fr 1fr;
         height: 1fr;
         width: 1fr;
     }
@@ -1097,9 +1097,9 @@ class LynxTuiApp(App):
     }
     #send-sweep-slot {
         column-span: 2;
-        height: 9;
+        height: 10;
         min-height: 6;
-        max-height: 9;
+        max-height: 10;
     }
     #difficulty-chart {
         height: 1fr;
@@ -1134,6 +1134,12 @@ class LynxTuiApp(App):
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
     }
+    #overview-mempool,
+    #overview-storage {
+        height: 8;
+        min-height: 4;
+        max-height: 8;
+    }
     #map-peer-map {
         column-span: 4;
         row-span: 3;
@@ -1154,7 +1160,7 @@ class LynxTuiApp(App):
     }
     #overview-network,
     #overview-peers {
-        min-height: 18;
+        min-height: 21;
         height: 1fr;
         overflow-x: hidden;
         scrollbar-visibility: visible;
@@ -1162,9 +1168,9 @@ class LynxTuiApp(App):
         overflow-y: scroll;
     }
     #overview-node-status {
-        height: 9;
+        height: 10;
         min-height: 6;
-        max-height: 9;
+        max-height: 10;
     }
     #overview-addresses {
         min-height: 6;
@@ -1173,9 +1179,9 @@ class LynxTuiApp(App):
         scrollbar-gutter: stable;
     }
     #send-card {
-        height: 9;
+        height: 10;
         min-height: 6;
-        max-height: 9;
+        max-height: 10;
         padding: 2 2 1 2;
         align: center middle;
         align-horizontal: center;
@@ -1216,9 +1222,9 @@ class LynxTuiApp(App):
         text-wrap: nowrap;
     }
     #sweep-card {
-        height: 9;
+        height: 10;
         min-height: 6;
-        max-height: 9;
+        max-height: 10;
         padding: 2 2 1 2;
         align: center middle;
         align-horizontal: center;
@@ -1307,9 +1313,9 @@ class LynxTuiApp(App):
         color: $error-darken-2;
     }
     #overview-block-stats {
-        height: 9;
+        height: 10;
         min-height: 6;
-        max-height: 9;
+        max-height: 10;
         border: solid $primary-darken-2;
     }
     #settings {
