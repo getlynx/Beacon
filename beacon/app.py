@@ -1088,7 +1088,7 @@ class LynxTuiApp(App):
         layout: grid;
         grid-size: 6;
         grid-gutter: 0 1;
-        grid-rows: 22 auto 13fr 8fr 5fr;
+        grid-rows: 22 auto 9fr 10fr 7fr;
         height: 1fr;
         width: 1fr;
     }
