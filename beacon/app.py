@@ -1059,8 +1059,23 @@ class FirewallCard(VerticalScroll):
         self._warning_line = Static("", id="firewall-existing-rules-warning")
         self._toggle_btn = Button("Enable Firewall", id="firewall-toggle")
         self._fixed_lines = Static("", id="firewall-fixed-ports")
-        self._optional_container = Container(id="firewall-optional-ports")
+        self._optional_heading = Static("Optional ports:", id="firewall-optional-heading")
         self._unavailable_line = Static("", id="firewall-unavailable")
+
+        # Pre-create one row of widgets per optional port (avoids mount/remove_children churn)
+        self._opt_info: dict[int, Static] = {}
+        self._opt_enable: dict[int, Button] = {}
+        self._opt_disable: dict[int, Button] = {}
+        self._opt_rows: dict[int, Container] = {}
+        for opt in fw_service.OPTIONAL_PORTS:
+            p = opt["port"]
+            self._opt_info[p] = Static("", id=f"firewall-opt-info-{p}")
+            self._opt_enable[p] = Button("Enable", id=f"port-enable-{p}", classes="firewall-opt-btn")
+            self._opt_disable[p] = Button("Disable", id=f"port-disable-{p}", classes="firewall-opt-btn")
+            self._opt_rows[p] = Container(
+                self._opt_info[p], self._opt_enable[p], self._opt_disable[p],
+                id=f"firewall-opt-row-{p}", classes="firewall-opt-row"
+            )
 
     def compose(self) -> ComposeResult:
         yield self._unavailable_line
@@ -1072,8 +1087,9 @@ class FirewallCard(VerticalScroll):
         yield Static("Fixed ports (always open):", id="firewall-fixed-heading")
         yield self._fixed_lines
         yield Static("", id="firewall-spacer2")
-        yield Static("Optional ports:", id="firewall-optional-heading")
-        yield self._optional_container
+        yield self._optional_heading
+        for row in self._opt_rows.values():
+            yield row
 
     def refresh_state(self) -> None:
         backend = fw_service.get_backend()
@@ -1088,14 +1104,14 @@ class FirewallCard(VerticalScroll):
             self.query_one("#firewall-fixed-heading", Static).display = False
             self._fixed_lines.display = False
             self.query_one("#firewall-spacer2", Static).display = False
-            self.query_one("#firewall-optional-heading", Static).display = False
-            self._optional_container.display = False
+            self._optional_heading.display = False
+            for row in self._opt_rows.values():
+                row.display = False
             return
 
         self._unavailable_line.display = False
         status = fw_service.get_status()
         ssh_ports = fw_service.get_ssh_ports()
-        prefs = fw_service.load_prefs()
 
         # Status line
         status_label = "ACTIVE" if status == "active" else "INACTIVE"
@@ -1107,9 +1123,7 @@ class FirewallCard(VerticalScroll):
 
         # Pre-existing rules warning (only relevant when inactive, about to enable)
         if status != "active" and fw_service.get_has_existing_rules():
-            self._warning_line.update(
-                "⚠  Enabling will reset existing firewall rules."
-            )
+            self._warning_line.update("⚠  Enabling will reset existing firewall rules.")
             self._warning_line.display = True
         else:
             self._warning_line.display = False
@@ -1126,30 +1140,18 @@ class FirewallCard(VerticalScroll):
         fixed_text += f"  Lynx P2P     {fw_service.LYNX_P2P_PORT:<6}  TCP    [locked]"
         self._fixed_lines.update(fixed_text)
 
-        # Optional ports — rebuild buttons
-        self._optional_container.remove_children()
+        # Optional ports — update pre-created widgets in-place (no mount/remove needed)
         for opt in fw_service.OPTIONAL_PORTS:
-            port = opt["port"]
+            p = opt["port"]
             label = opt["label"]
-            enabled = fw_service.get_optional_port_enabled(port)
+            enabled = fw_service.get_optional_port_enabled(p)
             state_label = "enabled" if enabled else "disabled"
-            row = Container(id=f"firewall-opt-row-{port}", classes="firewall-opt-row")
-            info = Static(
-                f"  {label:<14} {port:<6}  TCP    [{state_label}]",
-                id=f"firewall-opt-info-{port}",
-            )
-            enable_btn = Button("Enable", id=f"port-enable-{port}", classes="firewall-opt-btn")
-            disable_btn = Button("Disable", id=f"port-disable-{port}", classes="firewall-opt-btn")
-            enable_btn.disabled = enabled
-            disable_btn.disabled = not enabled
-            row._nodes_to_add = [info, enable_btn, disable_btn]  # type: ignore[attr-defined]
-            self._optional_container.mount(row)
-            row.mount(info)
-            row.mount(enable_btn)
-            row.mount(disable_btn)
+            self._opt_info[p].update(f"  {label:<14} {p:<6}  TCP    [{state_label}]")
+            self._opt_enable[p].disabled = enabled
+            self._opt_disable[p].disabled = not enabled
 
-        # Note about monitoring
-        self.query_one("#firewall-optional-heading", Static).update(
+        # Monitoring note
+        self._optional_heading.update(
             "Optional ports:\n"
             + ("  (SSH port monitored every 30s while Beacon is running)" if status == "active" else "")
         )
