@@ -2494,8 +2494,6 @@ class LynxTuiApp(App):
         )
         self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines, staking_status=staking_status))
         beacon_ver_display = f"v{BEACON_VERSION}"
-        if self._update_available:
-            beacon_ver_display += f" (v{self._update_available} available)"
         daemon_label = self._node_name or "Daemon"
         ibd_status = "Syncing" if data['sync_monitor'] == "active" else "Synced"
         col = 18
@@ -2503,7 +2501,7 @@ class LynxTuiApp(App):
             f"{daemon_label + ' Uptime':<{col}} {uptime_display}",
             f"{daemon_label + ' Version':<{col}} {daemon_version}",
             f"{'Beacon Version':<{col}} {beacon_ver_display}",
-            f"{'Initial Block':<{col}} {ibd_status}",
+            f"{'Initial Blocks':<{col}} {ibd_status}",
             f"{'Tenant Status':<{col}} unregistered",
             f"{'Operating System':<{col}} {self._os_name}",
         ]

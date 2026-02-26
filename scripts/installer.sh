@@ -202,6 +202,21 @@ install_lynx_binary() {
   fi
 
   if [ -z "$download_url" ]; then
+    echo "ARM binary not in latest release. Checking release history..."
+    all_releases=$(curl -fsSL --max-time 30 \
+        "https://api.github.com/repos/${LYNX_REPO}/releases?per_page=10")
+    if [ "$OS_FAMILY" = "debian" ]; then
+      download_url=$(echo "$all_releases" | grep "browser_download_url" \
+          | grep -iE "debian|ubuntu|ol" | grep -iE "\\.zip" \
+          | grep -iE "arm" | head -n 1 | cut -d '"' -f 4)
+    elif [ "$OS_FAMILY" = "redhat" ]; then
+      download_url=$(echo "$all_releases" | grep "browser_download_url" \
+          | grep -iE "rhel|centos|fedora|redhat|rocky|almalinux|ol" \
+          | grep -iE "\\.zip" | grep -iE "arm" | head -n 1 | cut -d '"' -f 4)
+    fi
+  fi
+
+  if [ -z "$download_url" ]; then
     echo "No compatible Lynx binary found. Please install lynxd manually."
     return 1
   fi
