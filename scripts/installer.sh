@@ -72,12 +72,8 @@ EOF
  }
 
 update_login_bashrc() {
-  local target_user="${SUDO_USER:-root}"
-  local target_home
-  target_home=$(getent passwd "$target_user" | cut -d: -f6)
-  if [ -z "$target_home" ]; then
-    target_home="/root"
-  fi
+  local target_user="root"
+  local target_home="/root"
 
   local bashrc="${target_home}/.bashrc"
   local marker_begin="# >>> beacon >>>"
@@ -93,7 +89,7 @@ update_login_bashrc() {
   block=$(cat <<'EOF'
 # >>> beacon >>>
 alias beacon="/usr/local/bin/beacon"
-if [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && command -v beacon >/dev/null 2>&1; then
+if [ "$(id -u)" -eq 0 ] && [[ $- == *i* ]] && [ -t 0 ] && [ -t 1 ] && command -v beacon >/dev/null 2>&1; then
   beacon
 fi
 # <<< beacon <<<
@@ -127,6 +123,31 @@ EOF
   fi
 
   chown "$target_user":"$target_user" "$bashrc" 2>/dev/null || true
+
+  # Clean up beacon block from the invoking (non-root) user's .bashrc if present
+  if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+    local sudo_home
+    sudo_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    local sudo_bashrc="${sudo_home}/.bashrc"
+    if [ -f "$sudo_bashrc" ] && grep -qF "$marker_begin" "$sudo_bashrc"; then
+      awk -v begin="$marker_begin" -v end="$marker_end" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        !skip { print }
+      ' "$sudo_bashrc" > "${sudo_bashrc}.tmp" && mv "${sudo_bashrc}.tmp" "$sudo_bashrc"
+      chown "$SUDO_USER":"$SUDO_USER" "$sudo_bashrc" 2>/dev/null || true
+      echo "Removed beacon auto-start from ${sudo_bashrc}"
+    fi
+    if [ -f "$sudo_bashrc" ] && grep -qF "$marker_begin_old" "$sudo_bashrc"; then
+      awk -v begin="$marker_begin_old" -v end="$marker_end_old" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        !skip { print }
+      ' "$sudo_bashrc" > "${sudo_bashrc}.tmp" && mv "${sudo_bashrc}.tmp" "$sudo_bashrc"
+      chown "$SUDO_USER":"$SUDO_USER" "$sudo_bashrc" 2>/dev/null || true
+      echo "Removed legacy beacon auto-start from ${sudo_bashrc}"
+    fi
+  fi
 }
  
 ensure_swap() {
