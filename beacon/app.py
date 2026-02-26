@@ -1062,7 +1062,8 @@ class FirewallCard(VerticalScroll):
         self._optional_heading = Static("Optional ports:", id="firewall-optional-heading")
         self._unavailable_line = Static("", id="firewall-unavailable")
 
-        # Pre-create one row of widgets per optional port (avoids mount/remove_children churn)
+        # Pre-create one block of widgets per optional port (avoids mount/remove_children churn).
+        # Layout: info line on top, then a horizontal button row below — keeps buttons visible.
         self._opt_info: dict[int, Static] = {}
         self._opt_enable: dict[int, Button] = {}
         self._opt_disable: dict[int, Button] = {}
@@ -1072,8 +1073,12 @@ class FirewallCard(VerticalScroll):
             self._opt_info[p] = Static("", id=f"firewall-opt-info-{p}")
             self._opt_enable[p] = Button("Enable", id=f"port-enable-{p}", classes="firewall-opt-btn")
             self._opt_disable[p] = Button("Disable", id=f"port-disable-{p}", classes="firewall-opt-btn")
+            btn_row = Container(
+                self._opt_enable[p], self._opt_disable[p],
+                id=f"firewall-opt-btn-row-{p}", classes="firewall-opt-btn-row",
+            )
             self._opt_rows[p] = Container(
-                self._opt_info[p], self._opt_enable[p], self._opt_disable[p],
+                self._opt_info[p], btn_row,
                 id=f"firewall-opt-row-{p}", classes="firewall-opt-row"
             )
 
@@ -1459,7 +1464,7 @@ class LynxTuiApp(App):
     }
     #firewall-card {
         width: 70;
-        height: 22;
+        height: 26;
     }
     #firewall-status-line {
         padding-left: 1;
@@ -1498,15 +1503,19 @@ class LynxTuiApp(App):
         layout: vertical;
     }
     .firewall-opt-row {
+        layout: vertical;
+        height: auto;
+    }
+    .firewall-opt-btn-row {
         layout: horizontal;
         height: 3;
-        align-vertical: middle;
+        padding-left: 2;
     }
     .firewall-opt-btn {
         width: auto;
         min-width: 9;
         height: 3;
-        margin-left: 1;
+        margin-right: 1;
     }
     #timezone-select {
         width: 1fr;
