@@ -1716,11 +1716,11 @@ class LynxTuiApp(App):
     }
     #firewall-card {
         width: 1fr;
-        height: 26;
+        height: 22;
     }
     #backup-card {
         width: 1fr;
-        height: 26;
+        height: 22;
     }
     #backup-info-line {
         padding-left: 1;
@@ -1732,8 +1732,8 @@ class LynxTuiApp(App):
         color: $primary;
     }
     #backup-list {
-        height: 8;
-        min-height: 4;
+        height: 4;
+        min-height: 3;
     }
     #backup-actions {
         layout: horizontal;
