@@ -409,24 +409,13 @@ class RpcClient:
             return True, "OK"
         except Exception as e:
             err = str(e)
-            if "RPC credentials not configured" in err and self._cli_encryptwallet_exit_ok(passphrase):
-                return True, "OK"
-            return False, err
-
-    def _cli_encryptwallet_exit_ok(self, passphrase: str) -> bool:
-        """Run lynx-cli encryptwallet; returns True if command succeeded (exit 0)."""
-        datadir = self.get_datadir()
-        rpc_cli = os.environ.get("LYNX_RPC_CLI", "/usr/local/bin/lynx-cli")
         try:
-            r = subprocess.run(
-                [rpc_cli, "-datadir=" + datadir, "encryptwallet", passphrase],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            return r.returncode == 0
+            result = self._cli_call_with_params("encryptwallet", [passphrase])
+            if result is not None:
+                return True, "OK"
         except Exception:
-            return False
+            pass
+        return False, err
 
     def wallet_passphrase(self, passphrase: str, timeout_seconds: int) -> tuple[bool, str]:
         """Unlock wallet for staking. Timeout in seconds. Returns (success, message)."""
@@ -434,7 +423,14 @@ class RpcClient:
             self._rpc_call("walletpassphrase", [passphrase, timeout_seconds])
             return True, "OK"
         except Exception as e:
-            return False, str(e)
+            err = str(e)
+        try:
+            result = self._cli_call_with_params("walletpassphrase", [passphrase, timeout_seconds])
+            if result is not None:
+                return True, "OK"
+        except Exception:
+            pass
+        return False, err
 
     def wallet_lock(self) -> tuple[bool, str]:
         """Lock the wallet."""
@@ -442,7 +438,14 @@ class RpcClient:
             self._rpc_call("walletlock", [])
             return True, "OK"
         except Exception as e:
-            return False, str(e)
+            err = str(e)
+        try:
+            result = self._cli_call("walletlock")
+            if result is not None:
+                return True, "OK"
+        except Exception:
+            pass
+        return False, err
 
     def get_wallet_encryption_status(self) -> dict:
         """Return encryption status from getwalletinfo. encrypted=True if passphrase set; unlocked_until=0 when locked."""
