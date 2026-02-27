@@ -1116,6 +1116,9 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None]]):
         with Container(id="wallet-password-modal"):
             yield Static("Password:" if self._mode == "encrypt" else "Wallet password:", id="wallet-password-label")
             yield Input(placeholder="Enter password", password=True, id="wallet-password-input")
+            if self._mode == "encrypt":
+                yield Static("Confirm password:", id="wallet-password-confirm-label")
+                yield Input(placeholder="Re-enter password", password=True, id="wallet-password-confirm-input")
             if self._mode == "unlock":
                 yield Static("Unlock for:", id="wallet-duration-label")
                 yield SelectionList(
@@ -1139,6 +1142,16 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None]]):
                 self.notify("Password required", severity="warning")
                 return
             if self._mode == "encrypt":
+                confirm_input = self.query_one("#wallet-password-confirm-input", Input)
+                confirm = confirm_input.value or ""
+                if pwd != confirm:
+                    self.notify(
+                        "Encryption was not completed - please try again.",
+                        title="Passwords do not match",
+                        severity="error",
+                        timeout=5,
+                    )
+                    return
                 self.dismiss((pwd, None))
             else:
                 dur_sel = self.query_one("#wallet-duration-select", SelectionList)
@@ -1743,10 +1756,12 @@ class LynxTuiApp(App):
         height: auto;
     }
     #wallet-password-label,
+    #wallet-password-confirm-label,
     #wallet-duration-label {
         padding: 1 0;
     }
-    #wallet-password-input {
+    #wallet-password-input,
+    #wallet-password-confirm-input {
         width: 1fr;
         margin-bottom: 1;
     }
