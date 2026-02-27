@@ -335,6 +335,80 @@ EOF
   systemctl start lynx-sync-monitor.timer
 }
 
+install_backup() {
+  mkdir -p "${INSTALL_ROOT}"
+  cat <<'BACKUP_EOF' > "${INSTALL_ROOT}/lynx-wallet-backup.sh"
+#!/bin/bash
+set -euo pipefail
+
+WORKING_DIR="${LYNX_WORKING_DIR:-/var/lib/lynx}"
+CHAIN_ID="${LYNX_CHAIN_ID:-lynx}"
+BACKUP_DIR="${WORKING_DIR}/backup"
+RPC_CLI="${LYNX_RPC_CLI:-/usr/local/bin/lynx-cli}"
+LAST_HASH_FILE="${BACKUP_DIR}/.last-hash"
+RETENTION_DAYS=90
+
+mkdir -p "$BACKUP_DIR"
+
+if [ ! -x "$RPC_CLI" ]; then
+  echo "lynx-cli not found or not executable" >&2
+  exit 1
+fi
+
+TIMESTAMP=$(date -u +"%Y-%m-%d-%H-%M-%S")
+BACKUP_FILE="${BACKUP_DIR}/${TIMESTAMP}-${CHAIN_ID}.dat"
+
+if ! "$RPC_CLI" -datadir="$WORKING_DIR" backupwallet "$BACKUP_FILE" 2>/dev/null; then
+  echo "backupwallet failed" >&2
+  exit 1
+fi
+
+NEW_HASH=$(sha256sum "$BACKUP_FILE" | cut -d' ' -f1)
+if [ -f "$LAST_HASH_FILE" ]; then
+  OLD_HASH=$(cat "$LAST_HASH_FILE")
+  if [ "$NEW_HASH" = "$OLD_HASH" ]; then
+    rm -f "$BACKUP_FILE"
+    exit 0
+  fi
+fi
+echo "$NEW_HASH" > "$LAST_HASH_FILE"
+
+find "$BACKUP_DIR" -maxdepth 1 -name "*.dat" -mtime +$RETENTION_DAYS -delete 2>/dev/null || true
+
+exit 0
+BACKUP_EOF
+  chmod +x "${INSTALL_ROOT}/lynx-wallet-backup.sh"
+
+  cat <<EOF > /etc/systemd/system/lynx-backup.service
+[Unit]
+Description=Lynx wallet backup (every 6 hours)
+After=network.target lynx.service
+
+[Service]
+Type=oneshot
+Environment=LYNX_WORKING_DIR=${WORKING_DIR}
+Environment=LYNX_CHAIN_ID=lynx
+ExecStart=${INSTALL_ROOT}/lynx-wallet-backup.sh
+EOF
+
+  cat <<'EOF' > /etc/systemd/system/lynx-backup.timer
+[Unit]
+Description=Run Lynx wallet backup every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+Unit=lynx-backup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable lynx-backup.timer
+  systemctl start lynx-backup.timer
+}
+
  main() {
    require_root
    detect_os
@@ -344,6 +418,7 @@ EOF
   install_lynx_binary
   install_lynx_service
   install_sync_monitor
+  install_backup
    fetch_app
    install_app
    install_launcher

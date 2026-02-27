@@ -287,6 +287,74 @@ class RpcClient:
             except Exception:
                 return None
 
+    def get_backup_dir(self) -> str:
+        """Return the backup directory: $datadir/backup/."""
+        return os.path.join(self.get_datadir(), "backup")
+
+    def backupwallet(self, destination: str) -> tuple[bool, str]:
+        """Run backupwallet RPC. Returns (success, message)."""
+        try:
+            self._rpc_call("backupwallet", [destination])
+            return True, "OK"
+        except Exception as e:
+            err = str(e)
+        try:
+            self._cli_call_with_params("backupwallet", [destination])
+            return True, "OK"
+        except Exception:
+            pass
+        return False, err
+
+    def list_backups(self) -> list[dict]:
+        """Scan backup dir for .dat files. Returns list of {path, mtime, date_str, filename} sorted by mtime desc."""
+        backup_dir = self.get_backup_dir()
+        path = Path(backup_dir)
+        if not path.is_dir():
+            return []
+        result: list[dict] = []
+        for f in path.glob("*.dat"):
+            try:
+                stat = f.stat()
+                mtime = stat.st_mtime
+                date_str = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+                result.append({"path": str(f), "mtime": mtime, "date_str": date_str, "filename": f.name})
+            except OSError:
+                continue
+        result.sort(key=lambda x: x["mtime"], reverse=True)
+        return result
+
+    def restore_wallet(self, backup_path: str) -> tuple[bool, str]:
+        """Restore wallet from backup. Uses unloadwallet, copy, loadwallet. Returns (success, message)."""
+        import shutil
+
+        datadir = self.get_datadir()
+        wallet_dat = os.path.join(datadir, "wallet.dat")
+        backup_path = os.path.abspath(backup_path)
+        if not os.path.isfile(backup_path):
+            return False, "Backup file not found"
+        wallets = self._safe_call("listwallets") or []
+        wallet_name = wallets[0] if wallets else ""
+        try:
+            if wallet_name:
+                self._rpc_call("unloadwallet", [wallet_name])
+            else:
+                self._rpc_call("unloadwallet", [])
+        except Exception as e:
+            return False, f"Unload failed: {e}"
+        try:
+            shutil.copy2(backup_path, wallet_dat)
+        except Exception as e:
+            try:
+                self._rpc_call("loadwallet", [wallet_dat])
+            except Exception:
+                pass
+            return False, f"Copy failed: {e}"
+        try:
+            self._rpc_call("loadwallet", [wallet_dat])
+            return True, "Restored"
+        except Exception as e:
+            return False, f"Load failed: {e}"
+
     def get_size_on_disk(self) -> int | None:
         """Return blockchain size on disk in bytes (from getblockchaininfo.size_on_disk)."""
         try:
@@ -298,6 +366,46 @@ class RpcClient:
         except Exception:
             pass
         return None
+
+    def encrypt_wallet(self, passphrase: str) -> tuple[bool, str]:
+        """Encrypt wallet with passphrase (first-time only). Returns (success, message)."""
+        try:
+            self._rpc_call("encryptwallet", [passphrase])
+            return True, "OK"
+        except Exception as e:
+            return False, str(e)
+
+    def wallet_passphrase(self, passphrase: str, timeout_seconds: int) -> tuple[bool, str]:
+        """Unlock wallet for staking. Timeout in seconds. Returns (success, message)."""
+        try:
+            self._rpc_call("walletpassphrase", [passphrase, timeout_seconds])
+            return True, "OK"
+        except Exception as e:
+            return False, str(e)
+
+    def wallet_lock(self) -> tuple[bool, str]:
+        """Lock the wallet."""
+        try:
+            self._rpc_call("walletlock", [])
+            return True, "OK"
+        except Exception as e:
+            return False, str(e)
+
+    def get_wallet_encryption_status(self) -> dict:
+        """Return encryption status from getwalletinfo. encrypted=True if passphrase set; unlocked_until=0 when locked."""
+        info = self._safe_call("getwalletinfo") or {}
+        if not isinstance(info, dict):
+            return {}
+        unlocked_until = info.get("unlocked_until")
+        encrypted = unlocked_until is not None
+        if not encrypted and isinstance(info.get("encryption_status"), str):
+            enc = str(info.get("encryption_status", "")).lower()
+            encrypted = "locked" in enc or "encrypted" in enc
+        return {
+            "encrypted": encrypted,
+            "unlocked_until": unlocked_until,
+            "locked": encrypted and (unlocked_until is None or unlocked_until == 0),
+        }
 
     def get_daemon_status(self) -> str:
         """Return 'running' if daemon responds, else 'unknown'."""

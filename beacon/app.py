@@ -11,6 +11,7 @@ from packaging.version import Version, InvalidVersion
 from textual.app import App, ComposeResult
 from textual import events
 from textual.containers import Container, VerticalScroll
+from textual.screen import ModalScreen
 from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
 from textual.widgets import Button, Footer, Input, SelectionList, Sparkline, Static, TabbedContent, TabPane
@@ -29,6 +30,7 @@ from beacon.services.logs import LogTailer
 from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
 from beacon.services.system import SystemClient
+import beacon.services.backup as backup_service
 import beacon.services.firewall as fw_service
 
 BEACON_REPO = "getlynx/Beacon"
@@ -70,6 +72,16 @@ SUPPORTED_CURRENCIES: list[tuple[str, str]] = [
     ("INR - Indian Rupee", "INR"),
     ("MXN - Mexican Peso", "MXN"),
 ]
+# Wallet unlock duration options: (label, seconds)
+WALLET_UNLOCK_DURATIONS: list[tuple[str, int]] = [
+    ("15 minutes", 900),
+    ("1 hour", 3600),
+    ("6 hours", 21600),
+    ("24 hours", 86400),
+    ("7 days", 604800),
+    ("Forever", 999999999),
+]
+
 CURRENCY_SYMBOLS: dict[str, str] = {
     "USD": "$",
     "EUR": "€",
@@ -1092,6 +1104,97 @@ class MissionCard(Static):
         yield self._content
 
 
+class WalletPasswordScreen(ModalScreen[tuple[str, int | None]]):
+    """Modal for wallet password (encrypt or unlock). Returns (password, duration_seconds or None)."""
+
+    def __init__(self, mode: str = "unlock", **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._mode = mode
+
+    def compose(self) -> ComposeResult:
+        with Container(id="wallet-password-modal"):
+            yield Static("Password:" if self._mode == "encrypt" else "Wallet password:", id="wallet-password-label")
+            yield Input(placeholder="Enter password", password=True, id="wallet-password-input")
+            if self._mode == "unlock":
+                yield Static("Unlock for:", id="wallet-duration-label")
+                yield SelectionList(
+                    *[(label, sec, i == 0) for i, (label, sec) in enumerate(WALLET_UNLOCK_DURATIONS)],
+                    id="wallet-duration-select",
+                )
+            with Container(id="wallet-password-actions"):
+                yield Button("Cancel", id="wallet-password-cancel")
+                yield Button("Submit", id="wallet-password-submit", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#wallet-password-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "wallet-password-cancel":
+            self.dismiss(None)
+        elif event.button.id == "wallet-password-submit":
+            pwd_input = self.query_one("#wallet-password-input", Input)
+            pwd = pwd_input.value or ""
+            if not pwd.strip():
+                self.notify("Password required", severity="warning")
+                return
+            if self._mode == "encrypt":
+                self.dismiss((pwd, None))
+            else:
+                dur_sel = self.query_one("#wallet-duration-select", SelectionList)
+                selected = dur_sel.selected
+                duration = int(selected[0]) if selected else WALLET_UNLOCK_DURATIONS[0][1]
+                self.dismiss((pwd, duration))
+
+
+class WalletEncryptionCard(VerticalScroll):
+    """Settings card for wallet encryption."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = f"{E('🔐', '>')} Wallet Encryption"
+        self.add_class("card")
+        self._status_line = Static("", id="wallet-enc-status")
+        self._encrypt_btn = Button("Encrypt Wallet", id="wallet-encrypt")
+        self._unlock_btn = Button("Unlock for Staking", id="wallet-unlock")
+        self._lock_btn = Button("Lock Wallet", id="wallet-lock")
+
+    def compose(self) -> ComposeResult:
+        yield self._status_line
+        with Container(id="wallet-enc-actions"):
+            yield self._encrypt_btn
+            yield self._unlock_btn
+            yield self._lock_btn
+
+    def refresh_state(self) -> None:
+        try:
+            status = self.app.rpc.get_wallet_encryption_status()
+        except Exception:
+            status = {}
+        encrypted = status.get("encrypted", False)
+        locked = status.get("locked", True)
+        unlocked_until = status.get("unlocked_until")
+        if not encrypted:
+            self._status_line.update("Status: Not encrypted")
+            self._encrypt_btn.display = True
+            self._unlock_btn.display = False
+            self._lock_btn.display = False
+        else:
+            self._encrypt_btn.display = False
+            if locked:
+                self._status_line.update("Status: Encrypted (locked)")
+                self._unlock_btn.display = True
+                self._lock_btn.display = False
+            else:
+                ts = unlocked_until or 0
+                try:
+                    dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                except Exception:
+                    dt = "?"
+                self._status_line.update(f"Status: Encrypted (unlocked until {dt})")
+                self._unlock_btn.display = False
+                self._lock_btn.display = True
+
+
 class FirewallCard(VerticalScroll):
     """Settings card for managing the system firewall (UFW / firewalld)."""
 
@@ -1206,6 +1309,51 @@ class FirewallCard(VerticalScroll):
             + ("  (SSH port monitored every 30s while Beacon is running)" if status == "active" else "")
         )
 
+
+class BackupCard(VerticalScroll):
+    """Settings card for wallet backups."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = f"{E('💾', '>')} Wallet Backup"
+        self.add_class("card")
+        self._info_line = Static("", id="backup-info-line")
+        self._list = SelectionList(id="backup-list")
+        self._manual_btn = Button("Manual Backup", id="backup-manual")
+        self._restore_btn = Button("Restore", id="backup-restore", disabled=True)
+        self._selected_path: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield self._info_line
+        yield Static("Backups (by date):", id="backup-heading")
+        yield self._list
+        with Container(id="backup-actions"):
+            yield self._manual_btn
+            yield self._restore_btn
+
+    def refresh_state(self) -> None:
+        backup_dir = backup_service.get_backup_dir()
+        timer_active, next_run = backup_service.get_timer_status()
+        timer_str = "active" if timer_active == "active" else "inactive"
+        self._info_line.update(
+            f"Timer: every 6 hours ({timer_str})\nDirectory: {backup_dir}"
+        )
+        backups = backup_service.get_backup_list()
+        self._list.clear_options()
+        for b in backups:
+            self._list.add_option((f"{b['date_str']} — {b['filename']}", b["path"], False))
+        self._restore_btn.disabled = self._selected_path is None
+        if len(backups) > 30 and not getattr(self.app, "_notified_30_backups", False):
+            try:
+                self.app.notify(
+                    "You have over 30 backups. Consider pruning manually or wait for automatic 90-day retention.",
+                    title="Backup",
+                    severity="warning",
+                    timeout=8,
+                )
+                self.app._notified_30_backups = True
+            except Exception:
+                pass
 
 # All built-in themes + custom themes for cycle
 THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
@@ -1513,6 +1661,72 @@ class LynxTuiApp(App):
         width: 1fr;
         height: 26;
     }
+    #backup-card {
+        width: 1fr;
+        height: 26;
+    }
+    #backup-info-line {
+        padding-left: 1;
+        height: auto;
+    }
+    #backup-heading {
+        padding-left: 1;
+        height: auto;
+        color: $primary;
+    }
+    #backup-list {
+        height: 8;
+        min-height: 4;
+    }
+    #backup-actions {
+        layout: horizontal;
+        height: auto;
+        padding-top: 1;
+    }
+    #backup-actions Button {
+        margin-right: 1;
+    }
+    #wallet-encryption-card {
+        width: 1fr;
+        height: 22;
+    }
+    #wallet-enc-status {
+        padding-left: 1;
+        height: auto;
+    }
+    #wallet-enc-actions {
+        layout: horizontal;
+        height: auto;
+        padding-top: 1;
+    }
+    #wallet-enc-actions Button {
+        margin-right: 1;
+    }
+    #wallet-password-modal {
+        padding: 2;
+        width: 50;
+        height: auto;
+    }
+    #wallet-password-label,
+    #wallet-duration-label {
+        padding: 1 0;
+    }
+    #wallet-password-input {
+        width: 1fr;
+        margin-bottom: 1;
+    }
+    #wallet-duration-select {
+        height: 8;
+        margin-bottom: 1;
+    }
+    #wallet-password-actions {
+        layout: horizontal;
+        height: auto;
+        padding-top: 2;
+    }
+    #wallet-password-actions Button {
+        margin-right: 1;
+    }
     #firewall-status-line {
         padding-left: 1;
         height: auto;
@@ -1702,7 +1916,12 @@ class LynxTuiApp(App):
         self.share_card = ShareCard(id="share-card-settings")
         self.mission_card = MissionCard(id="mission-card")
         self.firewall_card = FirewallCard(id="firewall-card")
+        self.backup_card = BackupCard(id="backup-card")
+        self.wallet_encryption_card = WalletEncryptionCard(id="wallet-encryption-card")
         self._cached_ssh_ports: list[int] = []
+        self._last_backup_count: int = 0
+        self._last_backup_mtime: float = 0.0
+        self._notified_30_backups: bool = False
         self._currency = "USD"
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
@@ -1864,6 +2083,8 @@ class LynxTuiApp(App):
                         yield self.share_card
                         yield self.mission_card
                         yield self.firewall_card
+                        yield self.backup_card
+                        yield self.wallet_encryption_card
         yield self.status_bar
         yield Footer()
 
@@ -1908,7 +2129,10 @@ class LynxTuiApp(App):
         self.set_timer(10.0, self._check_milestones)
         self.set_timer(10.0, lambda: self.set_interval(60, self._check_milestones))
         self.set_timer(1.0, self._init_firewall_card)
+        self.set_timer(3.0, self._init_backup_card)
+        self.set_timer(4.0, self._init_wallet_encryption_card)
         self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
+        self.set_timer(60.0, lambda: self.set_interval(300, self._check_backup_timer))
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -2127,6 +2351,32 @@ class LynxTuiApp(App):
                 pass
             return
 
+        if btn_id == "backup-manual":
+            await self._handle_backup_manual()
+            return
+
+        if btn_id == "backup-restore":
+            await self._handle_backup_restore()
+            return
+
+        if btn_id == "wallet-encrypt":
+            self.push_screen(WalletPasswordScreen(mode="encrypt"), self._on_wallet_encrypt_result)
+            return
+
+        if btn_id == "wallet-unlock":
+            self.push_screen(WalletPasswordScreen(mode="unlock"), self._on_wallet_unlock_result)
+            return
+
+        if btn_id == "wallet-lock":
+            ok, msg = await asyncio.get_event_loop().run_in_executor(None, self.rpc.wallet_lock)
+            if ok:
+                self.notify("Wallet locked.", title="Lock", severity="information")
+            else:
+                self.notify(msg, title="Lock failed", severity="error")
+            self.wallet_encryption_card.refresh_state()
+            return
+            return
+
         if btn_id == "send-button":
             await self._handle_send()
             return
@@ -2166,6 +2416,30 @@ class LynxTuiApp(App):
             # Refresh displays to show new timezone
             await self.refresh_timezone()
 
+    def _init_backup_card(self) -> None:
+        """Initialize backup card state."""
+        self.backup_card.refresh_state()
+        backups = backup_service.get_backup_list()
+        self._last_backup_count = len(backups)
+        self._last_backup_mtime = max((b["mtime"] for b in backups), default=0.0)
+
+    def _init_wallet_encryption_card(self) -> None:
+        """Initialize wallet encryption card state."""
+        self.wallet_encryption_card.refresh_state()
+
+    def _check_backup_timer(self) -> None:
+        """Poll for new backups from timer; show toast if detected."""
+        backups = backup_service.get_backup_list()
+        count = len(backups)
+        newest = max((b["mtime"] for b in backups), default=0.0)
+        if count > self._last_backup_count or (count > 0 and newest > self._last_backup_mtime):
+            if self._last_backup_count >= 0:
+                fn = next((b["filename"] for b in backups if b["mtime"] == newest), "backup")
+                self.notify(f"Timer backup: {fn}", title="Backup", severity="information", timeout=5)
+            self._last_backup_count = count
+            self._last_backup_mtime = newest
+        self.backup_card.refresh_state()
+
     async def _init_firewall_card(self) -> None:
         """Initialize the firewall card state and cache SSH ports."""
         self._cached_ssh_ports = await asyncio.get_event_loop().run_in_executor(
@@ -2192,6 +2466,115 @@ class LynxTuiApp(App):
             severity = "information" if ok else "error"
         self.notify(msg, title=title, severity=severity, timeout=5)
         self.firewall_card.refresh_state()
+
+    async def _handle_backup_manual(self) -> None:
+        """Run manual backup, show toast, prune old, refresh."""
+        ok, result = await asyncio.get_event_loop().run_in_executor(
+            None, backup_service.run_manual_backup
+        )
+        if ok:
+            filename = result if isinstance(result, str) and result != "(unchanged, skipped)" else "backup"
+            self.notify(f"Backup completed: {filename}", title="Backup", severity="information", timeout=5)
+            backups = backup_service.get_backup_list()
+            self._last_backup_count = len(backups)
+            self._last_backup_mtime = max((b["mtime"] for b in backups), default=0.0)
+        else:
+            self.notify(result, title="Backup failed", severity="error", timeout=5)
+        pruned = await asyncio.get_event_loop().run_in_executor(None, backup_service.prune_old_backups)
+        if pruned > 0:
+            self.notify(f"Pruned {pruned} backup(s) older than 90 days.", title="Backup", timeout=3)
+        self.backup_card.refresh_state()
+
+    async def _handle_backup_restore(self) -> None:
+        """Restore selected backup. Requires manual backup first."""
+        path = self.backup_card._selected_path
+        if not path:
+            self.notify("Select a backup first.", title="Restore", severity="warning")
+            return
+        ok, safety_msg = await asyncio.get_event_loop().run_in_executor(
+            None, backup_service.run_manual_backup
+        )
+        if not ok:
+            self.notify(f"Safety backup failed: {safety_msg}. Restore aborted.", title="Restore", severity="error")
+            return
+        self.notify("Safety backup done. Restoring...", title="Restore", timeout=3)
+        ok, msg = await asyncio.get_event_loop().run_in_executor(
+            None, self.rpc.restore_wallet, path
+        )
+        if ok:
+            self.notify("Wallet restored. Refreshing...", title="Restore", severity="information")
+            await self.refresh_data()
+        else:
+            self.notify(msg, title="Restore failed", severity="error")
+        self.backup_card.refresh_state()
+
+    def _on_wallet_encrypt_result(self, result: tuple[str, int | None] | None) -> None:
+        """Handle result from encrypt password screen."""
+        if result is None:
+            return
+        pwd, _ = result
+
+        def _do() -> tuple[bool, str]:
+            return self.rpc.encrypt_wallet(pwd)
+
+        async def _run() -> None:
+            ok, msg = await asyncio.get_event_loop().run_in_executor(None, _do)
+            if ok:
+                self.notify("Wallet encrypted. Restart may be required.", title="Encryption", severity="information")
+            else:
+                self.notify(msg, title="Encryption failed", severity="error")
+            self.wallet_encryption_card.refresh_state()
+
+        asyncio.ensure_future(_run())
+
+    def _on_wallet_unlock_then_staking(self, result: tuple[str, int | None] | None) -> None:
+        """After unlock, enable staking."""
+        if result is None:
+            return
+        pwd, duration = result
+        if duration is None:
+            duration = WALLET_UNLOCK_DURATIONS[0][1]
+
+        def _unlock_then_stake() -> tuple[bool, str]:
+            ok, msg = self.rpc.wallet_passphrase(pwd, duration)
+            if not ok:
+                return False, msg
+            res = self.rpc._safe_call("setstaking", ["true"])
+            return True, "OK"
+
+        async def _run() -> None:
+            ok, msg = await asyncio.get_event_loop().run_in_executor(None, _unlock_then_stake)
+            if ok:
+                self._staking_enabled = True
+                self.node_status_card.update_staking_status("enabled")
+                self.node_status_card.refresh()
+                self.notify("Staking enabled", title="Staking", timeout=3)
+            else:
+                self.notify(msg, title="Staking error", severity="error", timeout=5)
+            self.wallet_encryption_card.refresh_state()
+
+        asyncio.ensure_future(_run())
+
+    def _on_wallet_unlock_result(self, result: tuple[str, int | None] | None) -> None:
+        """Handle result from unlock password screen."""
+        if result is None:
+            return
+        pwd, duration = result
+        if duration is None:
+            duration = WALLET_UNLOCK_DURATIONS[0][1]
+
+        def _do() -> tuple[bool, str]:
+            return self.rpc.wallet_passphrase(pwd, duration)
+
+        async def _run() -> None:
+            ok, msg = await asyncio.get_event_loop().run_in_executor(None, _do)
+            if ok:
+                self.notify("Wallet unlocked for staking.", title="Unlock", severity="information")
+            else:
+                self.notify(msg, title="Unlock failed", severity="error")
+            self.wallet_encryption_card.refresh_state()
+
+        asyncio.ensure_future(_run())
 
     async def _handle_firewall_port(self, port: int, enabled: bool) -> None:
         """Toggle an optional firewall port."""
@@ -2245,6 +2628,8 @@ class LynxTuiApp(App):
             self._check_for_update(),
         )
         self.timezone_status.update("Refresh complete.")
+        self.backup_card.refresh_state()
+        self.wallet_encryption_card.refresh_state()
 
     def action_cycle_theme(self) -> None:
         """Cycle through available themes (t key)."""
@@ -2272,15 +2657,24 @@ class LynxTuiApp(App):
     async def action_toggle_staking(self) -> None:
         """Toggle staking on/off using setstaking RPC command."""
         try:
-            # Determine new state
             if self._staking_enabled is None or not self._staking_enabled:
                 new_state = True
                 command = "true"
             else:
                 new_state = False
                 command = "false"
-            
-            # Call setstaking via RPC
+
+            if new_state:
+                status = await asyncio.get_event_loop().run_in_executor(
+                    None, self.rpc.get_wallet_encryption_status
+                )
+                if status.get("encrypted") and status.get("locked"):
+                    self.push_screen(
+                        WalletPasswordScreen(mode="unlock"),
+                        self._on_wallet_unlock_then_staking,
+                    )
+                    return
+
             result = await asyncio.get_event_loop().run_in_executor(
                 None, self.rpc._safe_call, "setstaking", [command]
             )
@@ -2316,6 +2710,10 @@ class LynxTuiApp(App):
             selected_value = event.selection.value
             event.selection_list.deselect_all()
             event.selection_list.select(selected_value)
+        elif event.selection_list.id == "backup-list":
+            selected = event.selection_list.selected
+            self.backup_card._selected_path = str(selected[0]) if selected else None
+            self.backup_card._restore_btn.disabled = self.backup_card._selected_path is None
 
     def _schedule_update(self, delay: float, callback: callable) -> None:
         self.set_timer(delay, callback)
