@@ -5,6 +5,7 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from packaging.version import Version, InvalidVersion
 
@@ -1310,6 +1311,19 @@ class FirewallCard(VerticalScroll):
         )
 
 
+def _format_backup_display_filename(mtime: float, filename: str, tz_name: str) -> str:
+    """Format backup filename with timestamp in user's timezone."""
+    match = re.match(r"^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-(.+\.dat)$", filename)
+    suffix = match.group(1) if match else filename
+    try:
+        utc_dt = datetime.fromtimestamp(mtime, tz=timezone.utc)
+        local_dt = utc_dt.astimezone(ZoneInfo(tz_name))
+        ts = local_dt.strftime("%Y-%m-%d-%H-%M-%S")
+        return f"{ts}-{suffix}"
+    except Exception:
+        return filename
+
+
 class BackupCard(VerticalScroll):
     """Settings card for wallet backups."""
 
@@ -1340,8 +1354,19 @@ class BackupCard(VerticalScroll):
         )
         backups = backup_service.get_backup_list()
         self._list.clear_options()
+        tz_name = "UTC"
+        try:
+            if hasattr(self, "app") and self.app and hasattr(self.app, "system"):
+                tz_name = self.app.system.get_timezone() or "UTC"
+                if tz_name == "unknown":
+                    tz_name = "UTC"
+        except Exception:
+            pass
         for b in backups:
-            self._list.add_option((f"{b['date_str']} — {b['filename']}", b["path"], False))
+            display_name = _format_backup_display_filename(
+                b["mtime"], b["filename"], tz_name
+            )
+            self._list.add_option((display_name, b["path"], False))
         self._restore_btn.disabled = self._selected_path is None
         if len(backups) > 30 and not getattr(self.app, "_notified_30_backups", False):
             try:
