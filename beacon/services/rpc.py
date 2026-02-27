@@ -288,8 +288,21 @@ class RpcClient:
                 return None
 
     def get_backup_dir(self) -> str:
-        """Return the backup directory: $datadir/backup/."""
-        return os.path.join(self.get_datadir(), "backup")
+        """Return the backup directory: /var/lib/{chain-name}-backup/."""
+        chain_id = self._get_chain_id()
+        return f"/var/lib/{chain_id}-backup"
+
+    def _get_chain_id(self) -> str:
+        """Return chain identifier from config filename (lynx.conf -> lynx) or env."""
+        chain = os.environ.get("LYNX_CHAIN_ID")
+        if chain:
+            return chain
+        conf = Path(self.conf_path)
+        if conf.exists():
+            name = conf.stem.lower()
+            if name and name != "conf":
+                return name
+        return "lynx"
 
     def backupwallet(self, destination: str) -> tuple[bool, str]:
         """Run backupwallet RPC. Returns (success, message)."""

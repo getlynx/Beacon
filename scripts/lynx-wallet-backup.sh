@@ -2,7 +2,7 @@
 #
 # Lynx wallet backup script.
 # Runs via systemd timer every 6 hours, or manually.
-# Backup dir: $LYNX_WORKING_DIR/backup/
+# Backup dir: /var/lib/{chain-name}-backup/ (e.g. /var/lib/lynx-backup/)
 # Filename format: YYYY-MM-DD-HH-MM-SS-lynx.dat
 # Deduplicates by hash; prunes backups older than 90 days.
 #
@@ -10,7 +10,7 @@ set -euo pipefail
 
 WORKING_DIR="${LYNX_WORKING_DIR:-/var/lib/lynx}"
 CHAIN_ID="${LYNX_CHAIN_ID:-lynx}"
-BACKUP_DIR="${WORKING_DIR}/backup"
+BACKUP_DIR="/var/lib/${CHAIN_ID}-backup"
 RPC_CLI="${LYNX_RPC_CLI:-/usr/local/bin/lynx-cli}"
 LAST_HASH_FILE="${BACKUP_DIR}/.last-hash"
 RETENTION_DAYS=90

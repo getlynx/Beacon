@@ -23,8 +23,7 @@ def run_manual_backup(rpc: RpcClient | None = None) -> tuple[bool, str]:
     """Run a manual backup. Applies hash dedup. Returns (success, filename_or_error)."""
     rpc = rpc or get_rpc()
     backup_dir = rpc.get_backup_dir()
-    datadir = rpc.get_datadir()
-    chain_id = "lynx"
+    chain_id = rpc._get_chain_id()
     Path(backup_dir).mkdir(parents=True, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d-%H-%M-%S")
     dest = os.path.join(backup_dir, f"{ts}-{chain_id}.dat")

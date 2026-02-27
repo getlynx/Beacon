@@ -343,7 +343,7 @@ set -euo pipefail
 
 WORKING_DIR="${LYNX_WORKING_DIR:-/var/lib/lynx}"
 CHAIN_ID="${LYNX_CHAIN_ID:-lynx}"
-BACKUP_DIR="${WORKING_DIR}/backup"
+BACKUP_DIR="/var/lib/${CHAIN_ID}-backup"
 RPC_CLI="${LYNX_RPC_CLI:-/usr/local/bin/lynx-cli}"
 LAST_HASH_FILE="${BACKUP_DIR}/.last-hash"
 RETENTION_DAYS=90
@@ -378,6 +378,11 @@ find "$BACKUP_DIR" -maxdepth 1 -name "*.dat" -mtime +$RETENTION_DAYS -delete 2>/
 exit 0
 BACKUP_EOF
   chmod +x "${INSTALL_ROOT}/lynx-wallet-backup.sh"
+
+  CHAIN_ID="${LYNX_CHAIN_ID:-lynx}"
+  BACKUP_DIR="/var/lib/${CHAIN_ID}-backup"
+  mkdir -p "$BACKUP_DIR"
+  chown lynx:lynx "$BACKUP_DIR" 2>/dev/null || true
 
   cat <<EOF > /etc/systemd/system/lynx-backup.service
 [Unit]
