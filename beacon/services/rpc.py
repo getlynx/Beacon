@@ -24,7 +24,23 @@ class RpcClient:
         if not path.exists():
             return
         conf_dir = str(path.parent)
-        for line in path.read_text().splitlines():
+        lines = path.read_text().splitlines()
+        testnet = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "testnet":
+                try:
+                    testnet = int(value)
+                except (TypeError, ValueError):
+                    pass
+                break
+        prefix = "test." if testnet else "main."
+        for line in lines:
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
@@ -45,6 +61,12 @@ class RpcClient:
                 self.rpc_host = value
             elif key == "rpchost" and self.rpc_host == "127.0.0.1":
                 self.rpc_host = value
+            elif key == f"{prefix}rpcuser" and not self.rpc_user:
+                self.rpc_user = value
+            elif key == f"{prefix}rpcpassword" and not self.rpc_password:
+                self.rpc_password = value
+            elif key == f"{prefix}rpcport" and not self.rpc_port:
+                self.rpc_port = value
 
     def get_datadir(self) -> str:
         """Return the effective LYNX data directory (datadir from conf, else working_dir, else fallbacks)."""
@@ -96,7 +118,7 @@ class RpcClient:
         return True
 
     def _rpc_url(self) -> str:
-        port = self.rpc_port or "8332"
+        port = self.rpc_port or "9332"
         return f"http://{self.rpc_host}:{port}"
 
     def _rpc_call(self, method: str, params: Optional[list] = None) -> Any:
@@ -386,7 +408,25 @@ class RpcClient:
             self._rpc_call("encryptwallet", [passphrase])
             return True, "OK"
         except Exception as e:
-            return False, str(e)
+            err = str(e)
+            if "RPC credentials not configured" in err and self._cli_encryptwallet_exit_ok(passphrase):
+                return True, "OK"
+            return False, err
+
+    def _cli_encryptwallet_exit_ok(self, passphrase: str) -> bool:
+        """Run lynx-cli encryptwallet; returns True if command succeeded (exit 0)."""
+        datadir = self.get_datadir()
+        rpc_cli = os.environ.get("LYNX_RPC_CLI", "/usr/local/bin/lynx-cli")
+        try:
+            r = subprocess.run(
+                [rpc_cli, "-datadir=" + datadir, "encryptwallet", passphrase],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
 
     def wallet_passphrase(self, passphrase: str, timeout_seconds: int) -> tuple[bool, str]:
         """Unlock wallet for staking. Timeout in seconds. Returns (success, message)."""
