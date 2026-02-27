@@ -1344,6 +1344,11 @@ class BackupCard(VerticalScroll):
         with Container(id="backup-actions"):
             yield self._manual_btn
             yield self._restore_btn
+        yield Static(
+            "Note: Duplicate backups (same wallet content) are removed automatically. "
+            "Running Manual Backup twice without wallet changes will not add a second file.",
+            id="backup-note",
+        )
 
     def refresh_state(self) -> None:
         backup_dir = backup_service.get_backup_dir()
@@ -1710,6 +1715,11 @@ class LynxTuiApp(App):
     }
     #backup-actions Button {
         margin-right: 1;
+    }
+    #backup-note {
+        padding: 1 0 0 1;
+        color: $text-muted;
+        height: auto;
     }
     #wallet-encryption-card {
         width: 1fr;

@@ -125,9 +125,9 @@ EOF
   chown "$target_user":"$target_user" "$bashrc" 2>/dev/null || true
 
   # Clean up beacon block from the invoking (non-root) user's .bashrc if present
-  if [ -n "$SUDO_USER" ] && [ "$SUDO_USER" != "root" ]; then
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
     local sudo_home
-    sudo_home=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    sudo_home=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
     local sudo_bashrc="${sudo_home}/.bashrc"
     if [ -f "$sudo_bashrc" ] && grep -qF "$marker_begin" "$sudo_bashrc"; then
       awk -v begin="$marker_begin" -v end="$marker_end" '
@@ -135,7 +135,7 @@ EOF
         $0 == end { skip = 0; next }
         !skip { print }
       ' "$sudo_bashrc" > "${sudo_bashrc}.tmp" && mv "${sudo_bashrc}.tmp" "$sudo_bashrc"
-      chown "$SUDO_USER":"$SUDO_USER" "$sudo_bashrc" 2>/dev/null || true
+      chown "${SUDO_USER}:${SUDO_USER}" "$sudo_bashrc" 2>/dev/null || true
       echo "Removed beacon auto-start from ${sudo_bashrc}"
     fi
     if [ -f "$sudo_bashrc" ] && grep -qF "$marker_begin_old" "$sudo_bashrc"; then
@@ -144,7 +144,7 @@ EOF
         $0 == end { skip = 0; next }
         !skip { print }
       ' "$sudo_bashrc" > "${sudo_bashrc}.tmp" && mv "${sudo_bashrc}.tmp" "$sudo_bashrc"
-      chown "$SUDO_USER":"$SUDO_USER" "$sudo_bashrc" 2>/dev/null || true
+      chown "${SUDO_USER}:${SUDO_USER}" "$sudo_bashrc" 2>/dev/null || true
       echo "Removed legacy beacon auto-start from ${sudo_bashrc}"
     fi
   fi
