@@ -15,8 +15,10 @@ from textual.containers import Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
+from textual.strip import Strip
 from textual.widgets import Button, Footer, Input, SelectionList, Sparkline, Static, TabbedContent, TabPane
 from rich.console import Group
+from rich.style import Style
 from rich.text import Text
 
 from beacon import __version__ as BEACON_VERSION
@@ -261,6 +263,21 @@ class StatusBar(Static):
         if self.theme_visible:
             return f"Theme: {self.theme_name}"
         return ""
+
+
+class AlternatingSelectionList(SelectionList):
+    """SelectionList with alternating row colors (odd rows dimmed)."""
+
+    def render_line(self, y: int) -> Strip:
+        strip = super().render_line(y)
+        line_number = self.scroll_offset.y + y
+        try:
+            option_index, _ = self._lines[line_number]
+            if option_index % 2 == 1:
+                return strip.apply_style(Style(dim=True))
+        except (IndexError, KeyError):
+            pass
+        return strip
 
 
 class KeyValuePanel(Static):
@@ -1359,7 +1376,7 @@ class BackupCard(VerticalScroll):
         self.border_title = f"{E('💾', '>')} Wallet Backup"
         self.add_class("card")
         self._info_line = Static("", id="backup-info-line")
-        self._list = SelectionList(id="backup-list")
+        self._list = AlternatingSelectionList(id="backup-list")
         self._manual_btn = Button("Manual Backup", id="backup-manual")
         self._restore_btn = Button("Restore", id="backup-restore", disabled=True)
         self._selected_path: str | None = None
@@ -1682,7 +1699,7 @@ class LynxTuiApp(App):
         layout: grid;
         grid-size: 4;
         grid-gutter: 0 1;
-        padding: 1 2;
+        padding: 0 1;
         height: 1fr;
         width: 1fr;
     }
@@ -1734,9 +1751,6 @@ class LynxTuiApp(App):
     #backup-list {
         height: 6;
         min-height: 4;
-    }
-    #backup-list .option-list--option:odd {
-        color: $text-muted;
     }
     #backup-actions {
         layout: horizontal;
@@ -1854,9 +1868,6 @@ class LynxTuiApp(App):
         width: 1fr;
         height: 12;
     }
-    #timezone-select .option-list--option:odd {
-        color: $text-muted;
-    }
     #timezone-actions {
         layout: horizontal;
         height: auto;
@@ -1876,9 +1887,6 @@ class LynxTuiApp(App):
     #currency-select {
         width: 1fr;
         height: 12;
-    }
-    #currency-select .option-list--option:odd {
-        color: $text-muted;
     }
     #currency-actions {
         layout: horizontal;
@@ -1971,7 +1979,7 @@ class LynxTuiApp(App):
             f"{E('🧱', '#')} Block Statistics", "sync", id="overview-block-stats"
         )
         self.status_bar = StatusBar()
-        self.timezone_select = SelectionList(id="timezone-select")
+        self.timezone_select = AlternatingSelectionList(id="timezone-select")
         self.timezone_apply = Button("Apply", id="timezone-apply")
         self.timezone_status = Static("", id="timezone-status")
         self.timezone_card = TimezoneCard(
@@ -1981,7 +1989,7 @@ class LynxTuiApp(App):
             self.timezone_status,
             id="timezone-card",
         )
-        self.currency_select = SelectionList(id="currency-select")
+        self.currency_select = AlternatingSelectionList(id="currency-select")
         self.currency_apply = Button("Apply", id="currency-apply")
         self.currency_status = Static("", id="currency-status")
         self.currency_card = CurrencyCard(
