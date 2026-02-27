@@ -1681,7 +1681,7 @@ class LynxTuiApp(App):
     #settings {
         layout: grid;
         grid-size: 4;
-        grid-gutter: 1 2;
+        grid-gutter: 0 1;
         padding: 1 2;
         height: 1fr;
         width: 1fr;
@@ -1732,8 +1732,11 @@ class LynxTuiApp(App):
         color: $primary;
     }
     #backup-list {
-        height: 4;
-        min-height: 3;
+        height: 6;
+        min-height: 4;
+    }
+    #backup-list .option-list--option:nth-child(odd) {
+        color: $text-muted;
     }
     #backup-actions {
         layout: horizontal;
@@ -1851,6 +1854,9 @@ class LynxTuiApp(App):
         width: 1fr;
         height: 12;
     }
+    #timezone-select .option-list--option:nth-child(odd) {
+        color: $text-muted;
+    }
     #timezone-actions {
         layout: horizontal;
         height: auto;
@@ -1870,6 +1876,9 @@ class LynxTuiApp(App):
     #currency-select {
         width: 1fr;
         height: 12;
+    }
+    #currency-select .option-list--option:nth-child(odd) {
+        color: $text-muted;
     }
     #currency-actions {
         layout: horizontal;
