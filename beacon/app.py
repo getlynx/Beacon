@@ -1105,8 +1105,14 @@ class MissionCard(Static):
         yield self._content
 
 
-class WalletPasswordScreen(ModalScreen[tuple[str, int | None]]):
-    """Modal for wallet password (encrypt or unlock). Returns (password, duration_seconds or None)."""
+WALLET_UNLOCK_PURPOSES: list[tuple[str, str]] = [
+    ("Staking", "staking"),
+    ("Sending", "sending"),
+]
+
+
+class WalletPasswordScreen(ModalScreen[tuple[str, int | None, str | None]]):
+    """Modal for wallet password (encrypt or unlock). Returns (password, duration_seconds or None, purpose or None)."""
 
     def __init__(self, mode: str = "unlock", **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -1120,7 +1126,12 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None]]):
                 yield Static("Confirm password:", id="wallet-password-confirm-label")
                 yield Input(placeholder="Re-enter password", password=True, id="wallet-password-confirm-input")
             if self._mode == "unlock":
-                yield Static("Unlock for:", id="wallet-duration-label")
+                yield Static("Unlock for:", id="wallet-purpose-label")
+                yield SelectionList(
+                    *[(label, value, i == 0) for i, (label, value) in enumerate(WALLET_UNLOCK_PURPOSES)],
+                    id="wallet-purpose-select",
+                )
+                yield Static("Duration:", id="wallet-duration-label")
                 yield SelectionList(
                     *[(label, sec, i == 0) for i, (label, sec) in enumerate(WALLET_UNLOCK_DURATIONS)],
                     id="wallet-duration-select",
@@ -1152,12 +1163,15 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None]]):
                         timeout=5,
                     )
                     return
-                self.dismiss((pwd, None))
+                self.dismiss((pwd, None, None))
             else:
+                purpose_sel = self.query_one("#wallet-purpose-select", SelectionList)
+                purpose_selected = purpose_sel.selected
+                purpose = str(purpose_selected[0]) if purpose_selected else "staking"
                 dur_sel = self.query_one("#wallet-duration-select", SelectionList)
-                selected = dur_sel.selected
-                duration = int(selected[0]) if selected else WALLET_UNLOCK_DURATIONS[0][1]
-                self.dismiss((pwd, duration))
+                duration_selected = dur_sel.selected
+                duration = int(duration_selected[0]) if duration_selected else WALLET_UNLOCK_DURATIONS[0][1]
+                self.dismiss((pwd, duration, purpose))
 
 
 class WalletEncryptionCard(VerticalScroll):
@@ -1169,7 +1183,7 @@ class WalletEncryptionCard(VerticalScroll):
         self.add_class("card")
         self._status_line = Static("", id="wallet-enc-status")
         self._encrypt_btn = Button("Encrypt Wallet", id="wallet-encrypt")
-        self._unlock_btn = Button("Unlock for Staking", id="wallet-unlock")
+        self._unlock_btn = Button("Unlock Wallet", id="wallet-unlock")
         self._lock_btn = Button("Lock Wallet", id="wallet-lock")
 
     def compose(self) -> ComposeResult:
@@ -1757,8 +1771,13 @@ class LynxTuiApp(App):
     }
     #wallet-password-label,
     #wallet-password-confirm-label,
+    #wallet-purpose-label,
     #wallet-duration-label {
         padding: 1 0;
+    }
+    #wallet-purpose-select {
+        height: 4;
+        margin-bottom: 1;
     }
     #wallet-password-input,
     #wallet-password-confirm-input {
@@ -2558,11 +2577,11 @@ class LynxTuiApp(App):
             self.notify(msg, title="Restore failed", severity="error")
         self.backup_card.refresh_state()
 
-    def _on_wallet_encrypt_result(self, result: tuple[str, int | None] | None) -> None:
+    def _on_wallet_encrypt_result(self, result: tuple[str, int | None, str | None] | None) -> None:
         """Handle result from encrypt password screen."""
         if result is None:
             return
-        pwd, _ = result
+        pwd, _, _ = result
 
         def _do() -> tuple[bool, str]:
             return self.rpc.encrypt_wallet(pwd)
@@ -2577,11 +2596,11 @@ class LynxTuiApp(App):
 
         asyncio.ensure_future(_run())
 
-    def _on_wallet_unlock_then_staking(self, result: tuple[str, int | None] | None) -> None:
+    def _on_wallet_unlock_then_staking(self, result: tuple[str, int | None, str | None] | None) -> None:
         """After unlock, enable staking."""
         if result is None:
             return
-        pwd, duration = result
+        pwd, duration, _ = result
         if duration is None:
             duration = WALLET_UNLOCK_DURATIONS[0][1]
 
@@ -2605,13 +2624,14 @@ class LynxTuiApp(App):
 
         asyncio.ensure_future(_run())
 
-    def _on_wallet_unlock_result(self, result: tuple[str, int | None] | None) -> None:
+    def _on_wallet_unlock_result(self, result: tuple[str, int | None, str | None] | None) -> None:
         """Handle result from unlock password screen."""
         if result is None:
             return
-        pwd, duration = result
+        pwd, duration, purpose = result
         if duration is None:
             duration = WALLET_UNLOCK_DURATIONS[0][1]
+        purpose = purpose or "staking"
 
         def _do() -> tuple[bool, str]:
             return self.rpc.wallet_passphrase(pwd, duration)
@@ -2619,7 +2639,12 @@ class LynxTuiApp(App):
         async def _run() -> None:
             ok, msg = await asyncio.get_event_loop().run_in_executor(None, _do)
             if ok:
-                self.notify("Wallet unlocked for staking.", title="Unlock", severity="information")
+                purpose_label = "staking" if purpose == "staking" else "sending"
+                self.notify(
+                    f"Wallet unlocked for {purpose_label}.",
+                    title="Unlock",
+                    severity="information",
+                )
             else:
                 self.notify(msg, title="Unlock failed", severity="error")
             self.wallet_encryption_card.refresh_state()
@@ -2750,7 +2775,13 @@ class LynxTuiApp(App):
             self.notify(str(e)[:60], title="Staking error", severity="error", timeout=5)
 
     def on_selection_list_selection_toggled(self, event: SelectionList.SelectionToggled) -> None:
-        if event.selection_list.id == "wallet-duration-select":
+        if event.selection_list.id == "wallet-purpose-select":
+            if len(event.selection_list.selected) <= 1:
+                return
+            selected_value = event.selection.value
+            event.selection_list.deselect_all()
+            event.selection_list.select(selected_value)
+        elif event.selection_list.id == "wallet-duration-select":
             if len(event.selection_list.selected) <= 1:
                 return
             selected_value = event.selection.value
