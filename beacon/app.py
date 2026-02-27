@@ -1735,7 +1735,7 @@ class LynxTuiApp(App):
         height: 6;
         min-height: 4;
     }
-    #backup-list .option-list--option:nth-child(odd) {
+    #backup-list .option-list--option:odd {
         color: $text-muted;
     }
     #backup-actions {
@@ -1854,7 +1854,7 @@ class LynxTuiApp(App):
         width: 1fr;
         height: 12;
     }
-    #timezone-select .option-list--option:nth-child(odd) {
+    #timezone-select .option-list--option:odd {
         color: $text-muted;
     }
     #timezone-actions {
@@ -1877,7 +1877,7 @@ class LynxTuiApp(App):
         width: 1fr;
         height: 12;
     }
-    #currency-select .option-list--option:nth-child(odd) {
+    #currency-select .option-list--option:odd {
         color: $text-muted;
     }
     #currency-actions {
