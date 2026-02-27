@@ -2574,7 +2574,7 @@ class LynxTuiApp(App):
             ok, msg = self.rpc.wallet_passphrase(pwd, duration)
             if not ok:
                 return False, msg
-            res = self.rpc._safe_call("setstaking", ["true"])
+            self.rpc.set_staking(True)
             return True, "OK"
 
         async def _run() -> None:
@@ -2694,10 +2694,8 @@ class LynxTuiApp(App):
         try:
             if self._staking_enabled is None or not self._staking_enabled:
                 new_state = True
-                command = "true"
             else:
                 new_state = False
-                command = "false"
 
             if new_state:
                 status = await asyncio.get_event_loop().run_in_executor(
@@ -2711,9 +2709,9 @@ class LynxTuiApp(App):
                     return
 
             result = await asyncio.get_event_loop().run_in_executor(
-                None, self.rpc._safe_call, "setstaking", [command]
+                None, self.rpc.set_staking, new_state
             )
-            
+
             # Update local state and staking card subtitle
             if result == "true" or result is True:
                 self._staking_enabled = True
@@ -2725,6 +2723,10 @@ class LynxTuiApp(App):
                 self.node_status_card.update_staking_status("disabled")
                 self.node_status_card.refresh()
                 self.notify("Staking disabled", title="Staking", timeout=3)
+            elif result is None:
+                self.node_status_card.update_staking_status("error")
+                self.node_status_card.refresh()
+                self.notify("Staking command failed", title="Staking error", severity="error", timeout=5)
             else:
                 self.node_status_card.refresh()
         except Exception as e:
@@ -2733,7 +2735,13 @@ class LynxTuiApp(App):
             self.notify(str(e)[:60], title="Staking error", severity="error", timeout=5)
 
     def on_selection_list_selection_toggled(self, event: SelectionList.SelectionToggled) -> None:
-        if event.selection_list.id == "timezone-select":
+        if event.selection_list.id == "wallet-duration-select":
+            if len(event.selection_list.selected) <= 1:
+                return
+            selected_value = event.selection.value
+            event.selection_list.deselect_all()
+            event.selection_list.select(selected_value)
+        elif event.selection_list.id == "timezone-select":
             if len(event.selection_list.selected) <= 1:
                 return
             selected_value = event.selection.value

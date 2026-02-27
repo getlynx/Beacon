@@ -122,6 +122,7 @@ class RpcClient:
         return f"http://{self.rpc_host}:{port}"
 
     def _rpc_call(self, method: str, params: Optional[list] = None) -> Any:
+        """HTTP JSON-RPC call. Raises on failure."""
         if not self.rpc_user or not self.rpc_password:
             raise RuntimeError("RPC credentials not configured")
         payload = {"jsonrpc": "1.0", "id": "beacon", "method": method, "params": params or []}
@@ -207,15 +208,12 @@ class RpcClient:
         try:
             result = self._rpc_call("sendtoaddress", [addr, amt])
             return True, str(result) if result is not None else "Sent"
-        except Exception as e:
-            err_msg = str(e)
-        try:
-            result = self._cli_call_with_params("sendtoaddress", [addr, amt])
-            if result is not None:
-                txid = result.get("txid", result) if isinstance(result, dict) else result
-                return True, str(txid)
         except Exception:
             pass
+        result = self._cli_call_with_params("sendtoaddress", [addr, amt])
+        if result is not None:
+            txid = result.get("txid", result) if isinstance(result, dict) else result
+            return True, str(txid)
         return False, err_msg
 
     def sweep_to_address(self, address: str) -> tuple[bool, str]:
@@ -225,40 +223,36 @@ class RpcClient:
         if not addr:
             return False, "Address is required"
         err_msg = "Sweep failed"
+        balance = self._safe_call("getbalance")
+        bal = float(balance) if balance is not None else 0.0
+        if bal <= 0:
+            return False, "No balance to sweep"
         try:
-            balance = self._safe_call("getbalance")
-            bal = float(balance) if balance is not None else 0.0
-            if bal <= 0:
-                return False, "No balance to sweep"
-            # sendtoaddress(address, amount, comment, comment_to, subtractfeefromamount)
             result = self._rpc_call("sendtoaddress", [addr, bal, "", "", True])
             return True, str(result) if result is not None else "Swept"
-        except Exception as e:
-            err_msg = str(e)
-        try:
-            balance = self._safe_call("getbalance")
-            bal = float(balance) if balance is not None else 0.0
-            if bal <= 0:
-                return False, "No balance to sweep"
-            result = self._cli_call_with_params("sendtoaddress", [addr, bal, "", "", True])
-            if result is not None:
-                txid = result.get("txid", result) if isinstance(result, dict) else result
-                return True, str(txid)
         except Exception:
             pass
+        result = self._cli_call_with_params("sendtoaddress", [addr, bal, "", "", True])
+        if result is not None:
+            txid = result.get("txid", result) if isinstance(result, dict) else result
+            return True, str(txid)
         return False, err_msg
 
     def _safe_call(self, method: str, params: Optional[list] = None) -> Any:
+        """HTTP first, CLI fallback."""
         try:
             return self._rpc_call(method, params)
         except Exception:
-            # Try CLI fallback
-            if params:
-                # For methods with params, try CLI with params
-                return self._cli_call_with_params(method, params)
-            if method.startswith("get") or method.startswith("list") or method in {"uptime"}:
-                return self._cli_call(method)
-            return None
+            pass
+        if params:
+            result = self._cli_call_with_params(method, params)
+            if result is not None:
+                return result
+        if method.startswith("get") or method.startswith("list") or method in {"uptime"}:
+            result = self._cli_call(method)
+            if result is not None:
+                return result
+        return None
 
     def _systemd_is_active(self, unit: str) -> str:
         try:
@@ -302,12 +296,15 @@ class RpcClient:
     def getblock(self, block_hash: str, verbosity: int = 1) -> Dict[str, Any] | None:
         """Fetch block details. Verbosity 1 returns hash, height, tx array."""
         try:
-            return self._rpc_call("getblock", [block_hash, verbosity])
+            result = self._rpc_call("getblock", [block_hash, verbosity])
+            if result is not None and isinstance(result, dict):
+                return result
         except Exception:
-            try:
-                return self._cli_call_with_params("getblock", [block_hash, str(verbosity)])
-            except Exception:
-                return None
+            pass
+        result = self._cli_call_with_params("getblock", [block_hash, str(verbosity)])
+        if result is not None and isinstance(result, dict):
+            return result
+        return None
 
     def get_backup_dir(self) -> str:
         """Return the backup directory: /var/lib/{chain-name}-backup/."""
@@ -331,14 +328,24 @@ class RpcClient:
         try:
             self._rpc_call("backupwallet", [destination])
             return True, "OK"
-        except Exception as e:
-            err = str(e)
-        try:
-            self._cli_call_with_params("backupwallet", [destination])
-            return True, "OK"
         except Exception:
             pass
-        return False, err
+        result = self._cli_call_with_params("backupwallet", [destination])
+        if result is not None:
+            return True, "OK"
+        if self._cli_run_ok("backupwallet", [destination]):
+            return True, "OK"
+        return False, "Backup failed"
+
+    def _cli_run_ok(self, method: str, params: list) -> bool:
+        """Run lynx-cli; returns True if exit code 0 (success even with empty output)."""
+        rpc_cli = os.environ.get("LYNX_RPC_CLI", "lynx-cli")
+        try:
+            str_params = [str(p) for p in params]
+            r = subprocess.run([rpc_cli, method] + str_params, check=False, capture_output=True, text=True)
+            return r.returncode == 0
+        except Exception:
+            return False
 
     def list_backups(self) -> list[dict]:
         """Scan backup dir for .dat files. Returns list of {path, mtime, date_str, filename} sorted by mtime desc."""
@@ -369,26 +376,27 @@ class RpcClient:
             return False, "Backup file not found"
         wallets = self._safe_call("listwallets") or []
         wallet_name = wallets[0] if wallets else ""
+        unload_params = [wallet_name] if wallet_name else []
         try:
-            if wallet_name:
-                self._rpc_call("unloadwallet", [wallet_name])
-            else:
-                self._rpc_call("unloadwallet", [])
-        except Exception as e:
-            return False, f"Unload failed: {e}"
+            self._rpc_call("unloadwallet", unload_params)
+        except Exception:
+            if not self._cli_run_ok("unloadwallet", unload_params):
+                return False, "Unload failed"
         try:
             shutil.copy2(backup_path, wallet_dat)
         except Exception as e:
             try:
                 self._rpc_call("loadwallet", [wallet_dat])
             except Exception:
-                pass
+                self._cli_run_ok("loadwallet", [wallet_dat])
             return False, f"Copy failed: {e}"
         try:
             self._rpc_call("loadwallet", [wallet_dat])
             return True, "Restored"
-        except Exception as e:
-            return False, f"Load failed: {e}"
+        except Exception:
+            if not self._cli_run_ok("loadwallet", [wallet_dat]):
+                return False, "Load failed"
+            return True, "Restored"
 
     def get_size_on_disk(self) -> int | None:
         """Return blockchain size on disk in bytes (from getblockchaininfo.size_on_disk)."""
@@ -407,45 +415,56 @@ class RpcClient:
         try:
             self._rpc_call("encryptwallet", [passphrase])
             return True, "OK"
-        except Exception as e:
-            err = str(e)
-        try:
-            result = self._cli_call_with_params("encryptwallet", [passphrase])
-            if result is not None:
-                return True, "OK"
         except Exception:
             pass
-        return False, err
+        result = self._cli_call_with_params("encryptwallet", [passphrase])
+        if result is not None:
+            return True, "OK"
+        if self._cli_run_ok("encryptwallet", [passphrase]):
+            return True, "OK"
+        return False, "Encryption failed"
 
     def wallet_passphrase(self, passphrase: str, timeout_seconds: int) -> tuple[bool, str]:
         """Unlock wallet for staking. Timeout in seconds. Returns (success, message)."""
         try:
             self._rpc_call("walletpassphrase", [passphrase, timeout_seconds])
             return True, "OK"
-        except Exception as e:
-            err = str(e)
-        try:
-            result = self._cli_call_with_params("walletpassphrase", [passphrase, timeout_seconds])
-            if result is not None:
-                return True, "OK"
         except Exception:
             pass
-        return False, err
+        result = self._cli_call_with_params("walletpassphrase", [passphrase, timeout_seconds])
+        if result is not None:
+            return True, "OK"
+        if self._cli_run_ok("walletpassphrase", [passphrase, timeout_seconds]):
+            return True, "OK"
+        return False, "Unlock failed"
 
     def wallet_lock(self) -> tuple[bool, str]:
-        """Lock the wallet."""
+        """Lock the wallet. HTTP first, CLI fallback."""
         try:
             self._rpc_call("walletlock", [])
             return True, "OK"
-        except Exception as e:
-            err = str(e)
-        try:
-            result = self._cli_call("walletlock")
-            if result is not None:
-                return True, "OK"
         except Exception:
             pass
-        return False, err
+        result = self._cli_call("walletlock")
+        if result is not None:
+            return True, "OK"
+        if self._cli_run_ok("walletlock", []):
+            return True, "OK"
+        return False, "Lock failed"
+
+    def set_staking(self, enabled: bool) -> Any:
+        """Enable or disable staking. HTTP first, CLI fallback."""
+        command = "true" if enabled else "false"
+        try:
+            return self._rpc_call("setstaking", [command])
+        except Exception:
+            pass
+        result = self._cli_call_with_params("setstaking", [command])
+        if result is not None:
+            return result
+        if self._cli_run_ok("setstaking", [command]):
+            return command
+        return None
 
     def get_wallet_encryption_status(self) -> dict:
         """Return encryption status from getwalletinfo. encrypted=True if passphrase set; unlocked_until=0 when locked."""
