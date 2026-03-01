@@ -780,11 +780,43 @@ class AddressListPanel(VerticalScroll):
         self.add_class(accent_class)
         self.add_class("addresses-mission-mode")
         self._loaded = False
+        self._addr_entries: list[tuple[str, str, str]] = []
         self._content = Static(MISSION_TEXT, classes="mission-content")
 
     def compose(self) -> ComposeResult:
         with CenterMiddle(id="addresses-mission-wrapper"):
             yield self._content
+
+    def on_resize(self) -> None:
+        if self._addr_entries:
+            self._render_addresses()
+
+    def _render_addresses(self) -> None:
+        entries = self._addr_entries
+        if not entries:
+            return
+        addr_col_w = max(len(a) for a, _, _ in entries) + 2
+        bal_col_w = max(len(b) for _, b, _ in entries)
+        try:
+            available = max(20, self.size.width - 4)
+        except Exception:
+            available = 80
+        fixed_w = addr_col_w + bal_col_w
+        status_w = available - fixed_w
+        lines: list[str] = []
+        for addr, bal, status in entries:
+            if status_w > 0 and status:
+                st = status[:status_w]
+            elif status_w <= 0:
+                st = ""
+            else:
+                st = status
+            lines.append(f"{addr:<{addr_col_w}}{bal:>{bal_col_w}}  {st}")
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
 
     def update_lines(
         self,
@@ -840,14 +872,18 @@ class AddressListPanel(VerticalScroll):
         self.remove_class("addresses-mission-mode")
         self._content.remove_class("mission-content")
         self._content.add_class("network-row-text")
-        entries: list[tuple[str, str, str]] = []
+        self._addr_entries = []
         for e in addr_list:
             addr = str(e.get("address", ""))
             amount = e.get("amount", 0)
             confirmations = e.get("confirmations", 0)
             is_pending = e.get("is_pending", False)
-            bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
             amt = amount if isinstance(amount, (int, float)) else 0
+            raw = f"{amt:.8f}"
+            trimmed = raw.rstrip("0")
+            if "." in trimmed and len(trimmed) - trimmed.index(".") - 1 < 1:
+                trimmed = raw[:raw.index(".") + 2]
+            bal = trimmed
             if is_pending:
                 status = "Pending"
             elif amt == 0:
@@ -856,19 +892,11 @@ class AddressListPanel(VerticalScroll):
                 status = "Pending"
             elif 0 < confirmations < 31:
                 blocks_to_mature = 31 - confirmations
-                status = f"{blocks_to_mature} to mature"
+                status = f"Staking maturity in {blocks_to_mature} {'block' if blocks_to_mature == 1 else 'blocks'}"
             else:
                 status = "Trusted"
-            entries.append((addr, bal, status))
-        addr_col_w = max((len(a) for a, _, _ in entries), default=0) + 1
-        lines: list[str] = []
-        for addr, bal, status in entries:
-            lines.append(f"{addr:<{addr_col_w}} {bal:>18}  {status}")
-        texts = [
-            Text(line, style="dim" if i % 2 == 1 else "")
-            for i, line in enumerate(lines)
-        ]
-        self._content.update(Group(*texts))
+            self._addr_entries.append((addr, bal, status))
+        self._render_addresses()
 
 
 # Network Activity column widths: height=7, hash=4, delta=7, empty_marker=13, diff=6
