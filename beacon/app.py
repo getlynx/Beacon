@@ -795,7 +795,10 @@ class AddressListPanel(VerticalScroll):
     ) -> None:
         self._loaded = True
         if address_count is not None:
-            self.border_title = f"{E('💼', '>')} Addresses ({address_count})"
+            if address_count == 0:
+                self.border_title = f"{E('💼', '>')} Addresses (press c to create your first address)"
+            else:
+                self.border_title = f"{E('💼', '>')} Addresses ({address_count})"
         else:
             self.border_title = self.title
         balance_str = f"Wallet Balance: {wallet_balance:.8f}" if isinstance(wallet_balance, (int, float)) else "Wallet Balance: -"
@@ -1413,7 +1416,7 @@ class LynxTuiApp(App):
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_map_center", "Map Offset"),
-        ("e", "toggle_wallet_lock", "Wallet"),
+        ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
 
     CSS = """
@@ -1960,10 +1963,17 @@ class LynxTuiApp(App):
         self._currency = "USD"
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
+        self._wallet_ready = False
+        self._wallet_lock_state = "unencrypted"
         self._last_notified_block_height: int | None = None
         self._prev_peer_addresses: set[str] = set()
         self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
         self._last_node_center_lon: float | None = None
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "toggle_wallet_lock":
+            return True if self._wallet_ready else False
+        return True
 
     @staticmethod
     def _format_optional(value: object, empty: str = "-") -> str:
@@ -3221,6 +3231,21 @@ class LynxTuiApp(App):
             time_since = f"{time_since} ({tz_name})"
         difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
         is_syncing = bool(blockchain_info.get("initialblockdownload"))
+        daemon_running = data.get("daemon_status") == "running"
+        wallet_ready_now = daemon_running and not is_syncing
+        if wallet_ready_now != self._wallet_ready:
+            self._wallet_ready = wallet_ready_now
+            self.refresh_bindings()
+        unlocked_until = wallet_info.get("unlocked_until") if wallet_info else None
+        if unlocked_until is None:
+            new_lock_state = "unencrypted"
+        elif unlocked_until == 0:
+            new_lock_state = "locked"
+        else:
+            new_lock_state = "unlocked"
+        if new_lock_state != self._wallet_lock_state:
+            self._wallet_lock_state = new_lock_state
+            self._sync_wallet_binding()
         self.difficulty_chart.set_syncing(is_syncing)
         self._schedule_update(
             0.1,
@@ -3620,6 +3645,18 @@ class LynxTuiApp(App):
             self.bind("u", "apply_update", description=f"Update {E('⬆', '^')}")
         elif not self._update_available and has_binding:
             self._bindings.key_to_bindings.pop("u", None)
+        self.refresh_bindings()
+
+    def _sync_wallet_binding(self) -> None:
+        """Update the (e) key footer label to reflect current wallet state."""
+        labels = {
+            "unencrypted": "Encrypt Wallet",
+            "locked": "Unlock Wallet",
+            "unlocked": "Lock Wallet",
+        }
+        label = labels.get(self._wallet_lock_state, "Wallet")
+        self._bindings.key_to_bindings.pop("e", None)
+        self.bind("e", "toggle_wallet_lock", description=label)
         self.refresh_bindings()
 
     async def _check_for_update(self) -> None:
