@@ -4,6 +4,7 @@ import platform
 import re
 import subprocess
 import time
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -1965,6 +1966,9 @@ class LynxTuiApp(App):
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
         self._wallet_ready = False
         self._wallet_lock_state = "unencrypted"
+        self._wallet_unlock_purpose: str | None = None
+        self._address_count: int = 0
+        self._wallet_balance: float = 0.0
         self._last_notified_block_height: int | None = None
         self._prev_peer_addresses: set[str] = set()
         self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
@@ -1973,6 +1977,17 @@ class LynxTuiApp(App):
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if action == "toggle_wallet_lock":
             return True if self._wallet_ready else False
+        if action in ("toggle_send_card", "toggle_sweep_card"):
+            if self._address_count == 0 or self._wallet_balance <= 0:
+                return False
+            state = self._wallet_lock_state
+            if state == "unencrypted":
+                return True
+            if state == "locked":
+                return False
+            if state == "unlocked" and self._wallet_unlock_purpose == "sending":
+                return True
+            return False
         return True
 
     @staticmethod
@@ -2565,6 +2580,7 @@ class LynxTuiApp(App):
         async def _run() -> None:
             ok, msg = await asyncio.get_event_loop().run_in_executor(None, _unlock_then_stake)
             if ok:
+                self._wallet_unlock_purpose = "staking"
                 self._staking_enabled = True
                 self.node_status_card.update_staking_status("enabled")
                 self.node_status_card.refresh()
@@ -2590,6 +2606,7 @@ class LynxTuiApp(App):
         async def _run() -> None:
             ok, msg = await asyncio.get_event_loop().run_in_executor(None, _do)
             if ok:
+                self._wallet_unlock_purpose = purpose
                 purpose_label = "staking" if purpose == "staking" else "sending"
                 self.notify(
                     f"Wallet unlocked for {purpose_label}.",
@@ -3082,7 +3099,10 @@ class LynxTuiApp(App):
         addr_list = sorted(addr_list, key=lambda x: x.get("amount", 0), reverse=True)
         
         address_count = len(addr_list)
-            
+        if address_count != self._address_count:
+            self._address_count = address_count
+            self.refresh_bindings()
+
         chain_val = blockchain_info.get("chain", "-") if isinstance(blockchain_info, dict) else "-"
         mempool_lines = [
             f"Network: {chain_val}",
@@ -3163,6 +3183,12 @@ class LynxTuiApp(App):
         
         # Get wallet balance for pricing calculations
         wallet_balance = data.get("wallet_balance", 0)
+        new_balance = float(wallet_balance) if isinstance(wallet_balance, (int, float)) else 0.0
+        if (new_balance > 0) != (self._wallet_balance > 0):
+            self._wallet_balance = new_balance
+            self.refresh_bindings()
+        else:
+            self._wallet_balance = new_balance
         balance_value = 0.0
         price_numeric = price_data.get("priceUSD")
         change_24h = price_data.get("change24hPct")
@@ -3245,6 +3271,8 @@ class LynxTuiApp(App):
             new_lock_state = "unlocked"
         if new_lock_state != self._wallet_lock_state:
             self._wallet_lock_state = new_lock_state
+            if new_lock_state != "unlocked":
+                self._wallet_unlock_purpose = None
             self._sync_wallet_binding()
         self.difficulty_chart.set_syncing(is_syncing)
         self._schedule_update(
@@ -3654,9 +3682,12 @@ class LynxTuiApp(App):
             "locked": "Unlock Wallet",
             "unlocked": "Lock Wallet",
         }
-        label = labels.get(self._wallet_lock_state, "Wallet")
-        self._bindings.key_to_bindings.pop("e", None)
-        self.bind("e", "toggle_wallet_lock", description=label)
+        label = labels.get(self._wallet_lock_state, "Encrypt Wallet")
+        bindings_list = self._bindings.key_to_bindings.get("e")
+        if bindings_list:
+            self._bindings.key_to_bindings["e"] = [
+                dataclass_replace(b, description=label) for b in bindings_list
+            ]
         self.refresh_bindings()
 
     async def _check_for_update(self) -> None:
