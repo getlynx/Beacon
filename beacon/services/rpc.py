@@ -571,6 +571,7 @@ class RpcClient:
 
         balance = self._safe_call("getbalance") or 0
         listunspent = self._safe_call("listunspent") or []
+        unconfirmed_utxos = self._safe_call("listunspent", [0, 0]) or []
         address_groups = self._safe_call("listaddressgroupings") or []
         # Get all addresses including empty ones
         all_addresses = self._safe_call("listreceivedbyaddress", [0, True]) or []
@@ -631,6 +632,8 @@ class RpcClient:
             "peer_list": peer_list,
             "address_groups": address_groups,
             "all_addresses": all_addresses,
+            "listunspent": listunspent,
+            "unconfirmed_utxos": unconfirmed_utxos,
             "rpc_port": self.rpc_port or "8332",
             "rpc_security": "secure" if self.rpc_user and self.rpc_password else "unsecure",
             "working_dir": self.working_dir,

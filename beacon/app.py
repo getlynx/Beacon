@@ -846,10 +846,13 @@ class AddressListPanel(VerticalScroll):
             amount = e.get("amount", 0)
             txids = e.get("txids", [])
             confirmations = e.get("confirmations", 0)
+            is_pending = e.get("is_pending", False)
             bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
             tx_count = len(txids) if isinstance(txids, list) else 0
             amt = amount if isinstance(amount, (int, float)) else 0
-            if amt == 0:
+            if is_pending:
+                status = "Pending"
+            elif amt == 0:
                 status = ""
             elif tx_count == 0:
                 status = "-"
@@ -1020,6 +1023,8 @@ class SendCard(VerticalScroll):
     def clear_form(self) -> None:
         self._address_input.value = ""
         self._amount_input.value = ""
+        self._address_input.remove_class("-invalid")
+        self._amount_input.remove_class("-invalid")
         self._status.update("")
 
 
@@ -3045,6 +3050,8 @@ class LynxTuiApp(App):
         # Get all addresses - merge data from both sources
         all_addresses = data.get("all_addresses", [])
         address_groups = data.get("address_groups", [])
+        confirmed_utxos = data.get("listunspent", [])
+        unconfirmed_utxos = data.get("unconfirmed_utxos", [])
         
         # Create a lookup for received address data (for TX count and confirmations)
         received_lookup = {}
@@ -3054,6 +3061,31 @@ class LynxTuiApp(App):
                     addr = addr_entry.get("address")
                     if addr:
                         received_lookup[addr] = addr_entry
+        
+        # Build per-address min confirmations from actual UTXOs (youngest UTXO wins)
+        utxo_min_conf: dict[str, int] = {}
+        for utxo_list in (confirmed_utxos, unconfirmed_utxos):
+            if not isinstance(utxo_list, list):
+                continue
+            for utxo in utxo_list:
+                if not isinstance(utxo, dict):
+                    continue
+                addr = utxo.get("address")
+                conf = utxo.get("confirmations", 0)
+                if addr and isinstance(conf, int):
+                    if addr not in utxo_min_conf or conf < utxo_min_conf[addr]:
+                        utxo_min_conf[addr] = conf
+        
+        # Build pending balance per address from unconfirmed UTXOs (0 confirmations)
+        pending_by_addr: dict[str, float] = {}
+        if isinstance(unconfirmed_utxos, list):
+            for utxo in unconfirmed_utxos:
+                if not isinstance(utxo, dict):
+                    continue
+                addr = utxo.get("address")
+                amt = utxo.get("amount", 0)
+                if addr and isinstance(amt, (int, float)):
+                    pending_by_addr[addr] = pending_by_addr.get(addr, 0.0) + float(amt)
         
         addr_list: list[dict] = []
         address_count = 0
@@ -3070,16 +3102,20 @@ class LynxTuiApp(App):
                     addr = str(entry[0])
                     current_balance = entry[1] if isinstance(entry[1], (int, float)) else 0
                     
-                    # Look up TX data from received addresses
                     received_data = received_lookup.get(addr, {})
                     txids = received_data.get("txids", [])
-                    confirmations = received_data.get("confirmations", 0)
+                    confirmations = utxo_min_conf.get(addr, received_data.get("confirmations", 0))
+                    
+                    pending = pending_by_addr.get(addr, 0.0)
+                    display_amount = current_balance if current_balance else pending
+                    is_pending = current_balance == 0 and pending > 0
                     
                     addr_list.append({
                         "address": addr,
-                        "amount": current_balance,
+                        "amount": display_amount,
                         "txids": txids,
-                        "confirmations": confirmations
+                        "confirmations": confirmations,
+                        "is_pending": is_pending,
                     })
         
         # Include addresses from all_addresses (listreceivedbyaddress include_empty=true)
@@ -3094,12 +3130,14 @@ class LynxTuiApp(App):
                     continue
                 seen_addrs.add(addr)
                 txids = addr_entry.get("txids", [])
-                confirmations = addr_entry.get("confirmations", 0)
+                confirmations = utxo_min_conf.get(addr, addr_entry.get("confirmations", 0))
+                pending = pending_by_addr.get(addr, 0.0)
                 addr_list.append({
                     "address": addr,
-                    "amount": 0,
+                    "amount": pending,
                     "txids": txids,
-                    "confirmations": confirmations
+                    "confirmations": confirmations,
+                    "is_pending": pending > 0,
                 })
         
         # Sort by balance descending
