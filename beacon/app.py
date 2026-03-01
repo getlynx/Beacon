@@ -802,7 +802,11 @@ class AddressListPanel(VerticalScroll):
                 self.border_title = f"{E('💼', '>')} Addresses ({address_count})"
         else:
             self.border_title = self.title
-        balance_str = f"Wallet Balance: {wallet_balance:.8f}" if isinstance(wallet_balance, (int, float)) else "Wallet Balance: -"
+        if isinstance(wallet_balance, (int, float)):
+            bal_formatted = f"{wallet_balance:.8f}".rstrip("0").rstrip(".")
+            balance_str = f"Wallet Balance: {bal_formatted}"
+        else:
+            balance_str = "Wallet Balance: -"
         lock_label = ""
         if isinstance(wallet_info, dict):
             unlocked_until = wallet_info.get("unlocked_until")
