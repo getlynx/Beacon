@@ -848,7 +848,10 @@ class AddressListPanel(VerticalScroll):
             confirmations = e.get("confirmations", 0)
             bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
             tx_count = len(txids) if isinstance(txids, list) else 0
-            if tx_count == 0:
+            amt = amount if isinstance(amount, (int, float)) else 0
+            if amt == 0:
+                status = ""
+            elif tx_count == 0:
                 status = "-"
             elif confirmations == 0:
                 status = "Pending"
@@ -3106,6 +3109,7 @@ class LynxTuiApp(App):
         if address_count != self._address_count:
             self._address_count = address_count
             self.refresh_bindings()
+            self._schedule_send_sweep_reset_if_hidden()
 
         chain_val = blockchain_info.get("chain", "-") if isinstance(blockchain_info, dict) else "-"
         mempool_lines = [
@@ -3191,6 +3195,7 @@ class LynxTuiApp(App):
         if (new_balance > 0) != (self._wallet_balance > 0):
             self._wallet_balance = new_balance
             self.refresh_bindings()
+            self._schedule_send_sweep_reset_if_hidden()
         else:
             self._wallet_balance = new_balance
         balance_value = 0.0
@@ -3679,6 +3684,26 @@ class LynxTuiApp(App):
             self._bindings.key_to_bindings.pop("u", None)
         self.refresh_bindings()
 
+    def _schedule_send_sweep_reset_if_hidden(self) -> None:
+        """If Send/Sweep hotkeys would be hidden and a card is visible, reset to difficulty chart in 5s."""
+        send_sweep_hidden = (
+            self._address_count == 0
+            or self._wallet_balance <= 0
+            or self._wallet_lock_state == "locked"
+            or (
+                self._wallet_lock_state == "unlocked"
+                and self._wallet_unlock_purpose != "sending"
+            )
+        )
+        if send_sweep_hidden and (self.send_card.display or self.sweep_card.display):
+            self.set_timer(5.0, self._reset_send_sweep_to_difficulty_chart)
+
+    def _reset_send_sweep_to_difficulty_chart(self) -> None:
+        """Hide Send/Sweep cards and show difficulty chart."""
+        self.send_card.display = False
+        self.sweep_card.display = False
+        self.difficulty_chart.display = True
+
     def _sync_wallet_binding(self) -> None:
         """Update the (e) key footer label to reflect current wallet state."""
         labels = {
@@ -3693,6 +3718,7 @@ class LynxTuiApp(App):
                 dataclass_replace(b, description=label) for b in bindings_list
             ]
         self.refresh_bindings()
+        self._schedule_send_sweep_reset_if_hidden()
 
     async def _check_for_update(self) -> None:
         """Periodic check: compare local version against latest GitHub release."""
