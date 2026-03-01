@@ -840,22 +840,18 @@ class AddressListPanel(VerticalScroll):
         self.remove_class("addresses-mission-mode")
         self._content.remove_class("mission-content")
         self._content.add_class("network-row-text")
-        lines: list[str] = []
+        entries: list[tuple[str, str, str]] = []
         for e in addr_list:
             addr = str(e.get("address", ""))
             amount = e.get("amount", 0)
-            txids = e.get("txids", [])
             confirmations = e.get("confirmations", 0)
             is_pending = e.get("is_pending", False)
             bal = f"{amount:.8f}" if isinstance(amount, (int, float)) else "0.00000000"
-            tx_count = len(txids) if isinstance(txids, list) else 0
             amt = amount if isinstance(amount, (int, float)) else 0
             if is_pending:
                 status = "Pending"
             elif amt == 0:
                 status = ""
-            elif tx_count == 0:
-                status = "-"
             elif confirmations == 0:
                 status = "Pending"
             elif 0 < confirmations < 31:
@@ -863,7 +859,11 @@ class AddressListPanel(VerticalScroll):
                 status = f"{blocks_to_mature} to mature"
             else:
                 status = "Trusted"
-            lines.append(f"{addr[:50]:<36} {bal:>18}  {status}")
+            entries.append((addr, bal, status))
+        addr_col_w = max((len(a) for a, _, _ in entries), default=0) + 1
+        lines: list[str] = []
+        for addr, bal, status in entries:
+            lines.append(f"{addr:<{addr_col_w}} {bal:>18}  {status}")
         texts = [
             Text(line, style="dim" if i % 2 == 1 else "")
             for i, line in enumerate(lines)
@@ -3050,8 +3050,7 @@ class LynxTuiApp(App):
         # Get all addresses - merge data from both sources
         all_addresses = data.get("all_addresses", [])
         address_groups = data.get("address_groups", [])
-        confirmed_utxos = data.get("listunspent", [])
-        unconfirmed_utxos = data.get("unconfirmed_utxos", [])
+        all_utxos = data.get("listunspent", [])
         
         # Create a lookup for received address data (for TX count and confirmations)
         received_lookup = {}
@@ -3062,29 +3061,22 @@ class LynxTuiApp(App):
                     if addr:
                         received_lookup[addr] = addr_entry
         
-        # Build per-address min confirmations from actual UTXOs (youngest UTXO wins)
+        # Build per-address min confirmations and pending balances from UTXOs
         utxo_min_conf: dict[str, int] = {}
-        for utxo_list in (confirmed_utxos, unconfirmed_utxos):
-            if not isinstance(utxo_list, list):
-                continue
-            for utxo in utxo_list:
+        pending_by_addr: dict[str, float] = {}
+        if isinstance(all_utxos, list):
+            for utxo in all_utxos:
                 if not isinstance(utxo, dict):
                     continue
                 addr = utxo.get("address")
                 conf = utxo.get("confirmations", 0)
-                if addr and isinstance(conf, int):
+                amt = utxo.get("amount", 0)
+                if not addr:
+                    continue
+                if isinstance(conf, int):
                     if addr not in utxo_min_conf or conf < utxo_min_conf[addr]:
                         utxo_min_conf[addr] = conf
-        
-        # Build pending balance per address from unconfirmed UTXOs (0 confirmations)
-        pending_by_addr: dict[str, float] = {}
-        if isinstance(unconfirmed_utxos, list):
-            for utxo in unconfirmed_utxos:
-                if not isinstance(utxo, dict):
-                    continue
-                addr = utxo.get("address")
-                amt = utxo.get("amount", 0)
-                if addr and isinstance(amt, (int, float)):
+                if conf == 0 and isinstance(amt, (int, float)):
                     pending_by_addr[addr] = pending_by_addr.get(addr, 0.0) + float(amt)
         
         addr_list: list[dict] = []
