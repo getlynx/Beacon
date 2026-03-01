@@ -11,7 +11,7 @@ from packaging.version import Version, InvalidVersion
 
 from textual.app import App, ComposeResult
 from textual import events
-from textual.containers import Container, VerticalScroll
+from textual.containers import CenterMiddle, Container, VerticalScroll
 from textual.screen import ModalScreen
 from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
@@ -749,6 +749,21 @@ class PeerListPanel(VerticalScroll):
         self._content.update(Group(*texts))
 
 
+MISSION_TEXT = (
+    "Digital preservation means ensuring that\n"
+    "information remains accessible not for years,\n"
+    "but for centuries.\n"
+    "\n"
+    "By running this node, you are an active\n"
+    "participant in that mission.\n"
+    "\n"
+    "The Lynx Data Storage Network is designed\n"
+    "to store data for a minimum of 500 years —\n"
+    "reliably, affordably, and on the least\n"
+    "expensive hardware available."
+)
+
+
 class AddressListPanel(VerticalScroll):
     """Addresses card with colored row layout."""
 
@@ -757,13 +772,18 @@ class AddressListPanel(VerticalScroll):
         self.title = title
         self.accent_class = accent_class
         self.border_title = title
+        self.border_subtitle = "... loading"
         self.border_title_align = ("left", "top")
+        self.border_subtitle_align = ("left", "bottom")
         self.add_class("card")
         self.add_class(accent_class)
-        self._content = Static("... loading", classes="network-row-text")
+        self.add_class("addresses-mission-mode")
+        self._loaded = False
+        self._content = Static(MISSION_TEXT, classes="mission-content")
 
     def compose(self) -> ComposeResult:
-        yield self._content
+        with CenterMiddle(id="addresses-mission-wrapper"):
+            yield self._content
 
     def update_lines(
         self,
@@ -771,24 +791,47 @@ class AddressListPanel(VerticalScroll):
         address_count: int | None = None,
         wallet_balance: object = None,
         daemon_status: str = "unknown",
+        wallet_info: dict | None = None,
     ) -> None:
+        self._loaded = True
         if address_count is not None:
             self.border_title = f"{E('💼', '>')} Addresses ({address_count})"
         else:
             self.border_title = self.title
-        if isinstance(wallet_balance, (int, float)):
-            self.border_subtitle = f"Wallet Balance: {wallet_balance:.8f}"
+        balance_str = f"Wallet Balance: {wallet_balance:.8f}" if isinstance(wallet_balance, (int, float)) else "Wallet Balance: -"
+        lock_label = ""
+        if isinstance(wallet_info, dict):
+            unlocked_until = wallet_info.get("unlocked_until")
+            if unlocked_until is None:
+                lock_label = "Unencrypted"
+            elif unlocked_until == 0:
+                lock_label = "Locked"
+            else:
+                try:
+                    tz_name = "UTC"
+                    if hasattr(self, "app") and self.app and hasattr(self.app, "system"):
+                        tz_name = self.app.system.get_timezone() or "UTC"
+                        if tz_name == "unknown":
+                            tz_name = "UTC"
+                    utc_dt = datetime.fromtimestamp(unlocked_until, tz=timezone.utc)
+                    local_dt = utc_dt.astimezone(ZoneInfo(tz_name))
+                    dt = local_dt.strftime("%Y-%m-%d %I:%M %p")
+                    lock_label = f"Unlocked until {dt}"
+                except Exception:
+                    lock_label = "Unlocked"
+        if lock_label:
+            self.border_subtitle = f"{balance_str} | {lock_label}"
         else:
-            self.border_subtitle = "Wallet Balance: -"
-        self.border_subtitle_align = ("left", "bottom")
+            self.border_subtitle = balance_str
         if not addr_list:
-            empty_msg = (
-                "Daemon starting or offline."
-                if daemon_status != "running"
-                else "No addresses found"
-            )
-            self._content.update(empty_msg)
+            self.add_class("addresses-mission-mode")
+            self._content.remove_class("network-row-text")
+            self._content.add_class("mission-content")
+            self._content.update(MISSION_TEXT)
             return
+        self.remove_class("addresses-mission-mode")
+        self._content.remove_class("mission-content")
+        self._content.add_class("network-row-text")
         lines: list[str] = []
         for e in addr_list:
             addr = str(e.get("address", ""))
@@ -1094,34 +1137,6 @@ class ShareCard(Static):
         )
 
 
-class MissionCard(Static):
-    """Settings card displaying the project mission statement."""
-
-    MISSION_TEXT = (
-        "Digital preservation means ensuring that\n"
-        "information remains accessible not for years,\n"
-        "but for centuries.\n"
-        "\n"
-        "By running this node, you are an active\n"
-        "participant in that mission.\n"
-        "\n"
-        "The Lynx Data Storage Network is designed\n"
-        "to store data for a minimum of 500 years —\n"
-        "reliably, affordably, and on the least\n"
-        "expensive hardware available."
-    )
-
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-        self.border_title = f"{E(chr(0x1f4dc), '>')} Mission"
-        self.border_title_align = ("left", "top")
-        self.add_class("card")
-        self._content = Static(self.MISSION_TEXT, classes="mission-content")
-
-    def compose(self) -> ComposeResult:
-        yield self._content
-
-
 WALLET_UNLOCK_PURPOSES: list[tuple[str, str]] = [
     ("Staking", "staking"),
     ("Sending", "sending"),
@@ -1189,55 +1204,6 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None, str | None]]):
                 duration_selected = dur_sel.selected
                 duration = int(duration_selected[0]) if duration_selected else WALLET_UNLOCK_DURATIONS[0][1]
                 self.dismiss((pwd, duration, purpose))
-
-
-class WalletEncryptionCard(VerticalScroll):
-    """Settings card for wallet encryption."""
-
-    def __init__(self, **kwargs: object) -> None:
-        super().__init__(**kwargs)
-        self.border_title = f"{E('🔐', '>')} Wallet Encryption"
-        self.add_class("card")
-        self._status_line = Static("", id="wallet-enc-status")
-        self._encrypt_btn = Button("Encrypt Wallet", id="wallet-encrypt")
-        self._unlock_btn = Button("Unlock Wallet", id="wallet-unlock")
-        self._lock_btn = Button("Lock Wallet", id="wallet-lock")
-
-    def compose(self) -> ComposeResult:
-        yield self._status_line
-        with Container(id="wallet-enc-actions"):
-            yield self._encrypt_btn
-            yield self._unlock_btn
-            yield self._lock_btn
-
-    def refresh_state(self) -> None:
-        try:
-            status = self.app.rpc.get_wallet_encryption_status()
-        except Exception:
-            status = {}
-        encrypted = status.get("encrypted", False)
-        locked = status.get("locked", True)
-        unlocked_until = status.get("unlocked_until")
-        if not encrypted:
-            self._status_line.update("Status: Not encrypted")
-            self._encrypt_btn.display = True
-            self._unlock_btn.display = False
-            self._lock_btn.display = False
-        else:
-            self._encrypt_btn.display = False
-            if locked:
-                self._status_line.update("Status: Encrypted (locked)")
-                self._unlock_btn.display = True
-                self._lock_btn.display = False
-            else:
-                ts = unlocked_until or 0
-                try:
-                    dt = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-                except Exception:
-                    dt = "?"
-                self._status_line.update(f"Status: Encrypted (unlocked until {dt})")
-                self._unlock_btn.display = False
-                self._lock_btn.display = True
 
 
 class FirewallCard(VerticalScroll):
@@ -1447,6 +1413,7 @@ class LynxTuiApp(App):
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_map_center", "Map Offset"),
+        ("e", "toggle_wallet_lock", "Wallet"),
     ]
 
     CSS = """
@@ -1554,6 +1521,16 @@ class LynxTuiApp(App):
         height: 1fr;
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
+    }
+    #overview-addresses #addresses-mission-wrapper {
+        height: auto;
+    }
+    #overview-addresses.addresses-mission-mode #addresses-mission-wrapper {
+        height: 1fr;
+        align: center middle;
+    }
+    #overview-addresses .mission-content {
+        text-align: center;
     }
     #send-card {
         height: 9;
@@ -1721,23 +1698,13 @@ class LynxTuiApp(App):
     .share-content {
         text-align: center;
     }
-    #mission-card {
-        width: 1fr;
-        height: 22;
-        border: solid $primary-darken-2;
-        padding: 3 4;
-        content-align: center middle;
-    }
-    .mission-content {
-        text-align: center;
-    }
     #firewall-card {
         width: 1fr;
-        height: 22;
+        height: auto;
     }
     #backup-card {
         width: 1fr;
-        height: 22;
+        height: auto;
     }
     #backup-info-line {
         padding-left: 1;
@@ -1764,22 +1731,6 @@ class LynxTuiApp(App):
         padding: 1 0 0 1;
         color: $text-muted;
         height: auto;
-    }
-    #wallet-encryption-card {
-        width: 1fr;
-        height: 22;
-    }
-    #wallet-enc-status {
-        padding-left: 1;
-        height: auto;
-    }
-    #wallet-enc-actions {
-        layout: horizontal;
-        height: auto;
-        padding-top: 1;
-    }
-    #wallet-enc-actions Button {
-        margin-right: 1;
     }
     #wallet-password-modal {
         padding: 2;
@@ -2000,10 +1951,8 @@ class LynxTuiApp(App):
             id="currency-card",
         )
         self.share_card = ShareCard(id="share-card-settings")
-        self.mission_card = MissionCard(id="mission-card")
         self.firewall_card = FirewallCard(id="firewall-card")
         self.backup_card = BackupCard(id="backup-card")
-        self.wallet_encryption_card = WalletEncryptionCard(id="wallet-encryption-card")
         self._cached_ssh_ports: list[int] = []
         self._last_backup_count: int = 0
         self._last_backup_mtime: float = 0.0
@@ -2167,10 +2116,8 @@ class LynxTuiApp(App):
                         yield self.timezone_card
                         yield self.currency_card
                         yield self.share_card
-                        yield self.mission_card
                         yield self.firewall_card
                         yield self.backup_card
-                        yield self.wallet_encryption_card
         yield self.status_bar
         yield Footer()
 
@@ -2216,7 +2163,6 @@ class LynxTuiApp(App):
         self.set_timer(10.0, lambda: self.set_interval(60, self._check_milestones))
         self.set_timer(1.0, self._init_firewall_card)
         self.set_timer(3.0, self._init_backup_card)
-        self.set_timer(4.0, self._init_wallet_encryption_card)
         self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
         self.set_timer(60.0, lambda: self.set_interval(300, self._check_backup_timer))
 
@@ -2445,24 +2391,6 @@ class LynxTuiApp(App):
             await self._handle_backup_restore()
             return
 
-        if btn_id == "wallet-encrypt":
-            self.push_screen(WalletPasswordScreen(mode="encrypt"), self._on_wallet_encrypt_result)
-            return
-
-        if btn_id == "wallet-unlock":
-            self.push_screen(WalletPasswordScreen(mode="unlock"), self._on_wallet_unlock_result)
-            return
-
-        if btn_id == "wallet-lock":
-            ok, msg = await asyncio.get_event_loop().run_in_executor(None, self.rpc.wallet_lock)
-            if ok:
-                self.notify("Wallet locked.", title="Lock", severity="information")
-            else:
-                self.notify(msg, title="Lock failed", severity="error")
-            self.wallet_encryption_card.refresh_state()
-            return
-            return
-
         if btn_id == "send-button":
             await self._handle_send()
             return
@@ -2508,10 +2436,6 @@ class LynxTuiApp(App):
         backups = backup_service.get_backup_list()
         self._last_backup_count = len(backups)
         self._last_backup_mtime = max((b["mtime"] for b in backups), default=0.0)
-
-    def _init_wallet_encryption_card(self) -> None:
-        """Initialize wallet encryption card state."""
-        self.wallet_encryption_card.refresh_state()
 
     def _check_backup_timer(self) -> None:
         """Poll for new backups from timer; show toast if detected."""
@@ -2609,7 +2533,7 @@ class LynxTuiApp(App):
                 self.notify("Wallet encrypted. Restart may be required.", title="Encryption", severity="information")
             else:
                 self.notify(msg, title="Encryption failed", severity="error")
-            self.wallet_encryption_card.refresh_state()
+            await self.refresh_data()
 
         asyncio.ensure_future(_run())
 
@@ -2637,7 +2561,7 @@ class LynxTuiApp(App):
                 self.notify("Staking enabled", title="Staking", timeout=3)
             else:
                 self.notify(msg, title="Staking error", severity="error", timeout=5)
-            self.wallet_encryption_card.refresh_state()
+            await self.refresh_data()
 
         asyncio.ensure_future(_run())
 
@@ -2664,7 +2588,7 @@ class LynxTuiApp(App):
                 )
             else:
                 self.notify(msg, title="Unlock failed", severity="error")
-            self.wallet_encryption_card.refresh_state()
+            await self.refresh_data()
 
         asyncio.ensure_future(_run())
 
@@ -2721,7 +2645,6 @@ class LynxTuiApp(App):
         )
         self.timezone_status.update("Refresh complete.")
         self.backup_card.refresh_state()
-        self.wallet_encryption_card.refresh_state()
 
     def action_cycle_theme(self) -> None:
         """Cycle through available themes (t key)."""
@@ -2790,6 +2713,39 @@ class LynxTuiApp(App):
             self.node_status_card.update_staking_status(f"error: {str(e)[:20]}")
             self.node_status_card.refresh()
             self.notify(str(e)[:60], title="Staking error", severity="error", timeout=5)
+
+    async def action_toggle_wallet_lock(self) -> None:
+        """Cycle wallet encryption/lock state via (e) hotkey."""
+        try:
+            status = await asyncio.get_event_loop().run_in_executor(
+                None, self.rpc.get_wallet_encryption_status
+            )
+        except Exception:
+            self.notify("Cannot reach daemon", title="Wallet", severity="error", timeout=5)
+            return
+
+        encrypted = status.get("encrypted", False)
+        locked = status.get("locked", True)
+
+        if not encrypted:
+            self.push_screen(
+                WalletPasswordScreen(mode="encrypt"),
+                self._on_wallet_encrypt_result,
+            )
+        elif locked:
+            self.push_screen(
+                WalletPasswordScreen(mode="unlock"),
+                self._on_wallet_unlock_result,
+            )
+        else:
+            ok, msg = await asyncio.get_event_loop().run_in_executor(
+                None, self.rpc.wallet_lock
+            )
+            if ok:
+                self.notify("Wallet locked.", title="Wallet", severity="information")
+            else:
+                self.notify(msg, title="Lock failed", severity="error")
+            await self.refresh_data()
 
     def on_selection_list_selection_toggled(self, event: SelectionList.SelectionToggled) -> None:
         if event.selection_list.id == "wallet-purpose-select":
@@ -3302,6 +3258,7 @@ class LynxTuiApp(App):
                 address_count=address_count,
                 wallet_balance=data.get("wallet_balance"),
                 daemon_status=data.get("daemon_status", "unknown"),
+                wallet_info=data.get("wallet_info"),
             ),
         )
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))

@@ -22,7 +22,7 @@ def in_venv() -> bool:
 def venv_has_deps() -> bool:
     try:
         r = subprocess.run(
-            [str(VENV_PYTHON), "-c", "import pyproj; import textual; import shapely"],
+            [str(VENV_PYTHON), "-c", "import pyproj; import textual; import shapely; import packaging"],
             capture_output=True,
             timeout=5,
         )
