@@ -44,6 +44,20 @@ INSTALL_ROOT = "/usr/local/beacon"
 CRYPTOID_NODES_URL = "https://chainz.cryptoid.info/lynx/api.dws?q=nodes"
 LYNX_WORKING_DIR = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
 
+# Remove undesired built-in themes globally for this app session.
+for _theme_name in (
+    "solarized-light",
+    "textual-light",
+    "textual-ansi",
+    "nord",
+    "catppuccin-latte",
+    "rose-pine-dawn",
+    "atom-one-light",
+    "catppuccin-frappe",
+    "cattppuccin-frappe",
+):
+    BUILTIN_THEMES.pop(_theme_name, None)
+
 
 def _use_emoji() -> bool:
     """Return True if the terminal likely supports emoji glyphs."""
@@ -116,21 +130,6 @@ THEME_HIGH_CONTRAST_DARK = Theme(
     dark=True,
 )
 
-THEME_HIGH_CONTRAST_LIGHT = Theme(
-    name="beacon-high-contrast-light",
-    primary="#0066cc",
-    secondary="#008844",
-    accent="#cc4400",
-    foreground="#1a1a1a",
-    background="#f5f5f5",
-    surface="#ffffff",
-    panel="#e8e8e8",
-    success="#008800",
-    warning="#aa6600",
-    error="#cc0000",
-    dark=False,
-)
-
 THEME_VIVID = Theme(
     name="beacon-vivid",
     primary="#00bfff",
@@ -143,6 +142,66 @@ THEME_VIVID = Theme(
     success="#32cd32",
     warning="#ffd700",
     error="#ff4500",
+    dark=True,
+)
+
+THEME_DEEP_OCEAN = Theme(
+    name="beacon-deep-ocean",
+    primary="#4F8CFF",
+    secondary="#2DD4BF",
+    accent="#A78BFA",
+    foreground="#E6EDF7",
+    background="#0B1220",
+    surface="#111B2E",
+    panel="#16233A",
+    success="#22C55E",
+    warning="#F59E0B",
+    error="#EF4444",
+    dark=True,
+)
+
+THEME_GRAPHITE_NEON = Theme(
+    name="beacon-graphite-neon",
+    primary="#00B4FF",
+    secondary="#00E5A8",
+    accent="#C084FC",
+    foreground="#F5F5F5",
+    background="#0A0A0A",
+    surface="#141414",
+    panel="#1B1B1B",
+    success="#22C55E",
+    warning="#FACC15",
+    error="#F43F5E",
+    dark=True,
+)
+
+THEME_WARM_TERMINAL = Theme(
+    name="beacon-warm-terminal",
+    primary="#D97706",
+    secondary="#14B8A6",
+    accent="#8B5CF6",
+    foreground="#F2EDE3",
+    background="#11100E",
+    surface="#1A1815",
+    panel="#23201C",
+    success="#16A34A",
+    warning="#EAB308",
+    error="#DC2626",
+    dark=True,
+)
+
+THEME_BEACON_MIDNIGHT = Theme(
+    name="beacon-midnight",
+    primary="#5DA9FF",
+    secondary="#34D399",
+    accent="#F472B6",
+    foreground="#EAF2FF",
+    background="#0A1022",
+    surface="#131C35",
+    panel="#1B2747",
+    success="#22C55E",
+    warning="#F59E0B",
+    error="#EF4444",
     dark=True,
 )
 
@@ -1444,8 +1503,26 @@ class BackupCard(VerticalScroll):
 # All built-in themes + custom themes for cycle
 THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
     "beacon-high-contrast-dark",
-    "beacon-high-contrast-light",
     "beacon-vivid",
+    "beacon-deep-ocean",
+    "beacon-graphite-neon",
+    "beacon-warm-terminal",
+    "beacon-midnight",
+]
+# Remove variants we don't want in theme options/cycling.
+THEME_ORDER = [
+    t for t in THEME_ORDER
+    if t not in {
+        "solarized-light",
+        "textual-light",
+        "textual-ansi",
+        "nord",
+        "catppuccin-latte",
+        "rose-pine-dawn",
+        "atom-one-light",
+        "catppuccin-frappe",
+        "cattppuccin-frappe",
+    }
 ]
 
 
@@ -1946,6 +2023,13 @@ class Beacon(App):
 
     def __init__(self) -> None:
         super().__init__()
+        # Register custom themes early so they appear in Command Palette.
+        self.register_theme(THEME_HIGH_CONTRAST_DARK)
+        self.register_theme(THEME_VIVID)
+        self.register_theme(THEME_DEEP_OCEAN)
+        self.register_theme(THEME_GRAPHITE_NEON)
+        self.register_theme(THEME_WARM_TERMINAL)
+        self.register_theme(THEME_BEACON_MIDNIGHT)
         self.rpc = RpcClient()
         self.pricing = PricingClient()
         self.logs = LogTailer()
@@ -1965,6 +2049,8 @@ class Beacon(App):
         self._snow_effect_timer = None
         self._snow_effect_stop_timer = None
         self._snow_flakes: list[dict[str, object]] = []
+        self._theme_status_timer = None
+        self._suppress_theme_watch = False
         self._session_started_at_local = datetime.now(timezone.utc).astimezone()
         self._local_block_event_notified: set[int] = set()
         self._schrodinger_block_notified: set[int] = set()
@@ -2258,14 +2344,22 @@ class Beacon(App):
         yield Footer()
 
     async def on_mount(self) -> None:
-        # Register high-contrast themes
-        self.register_theme(THEME_HIGH_CONTRAST_DARK)
-        self.register_theme(THEME_HIGH_CONTRAST_LIGHT)
-        self.register_theme(THEME_VIVID)
+        # Hide selected built-in light themes from command palette/theme options.
+        self.available_themes.pop("solarized-light", None)
+        self.available_themes.pop("textual-light", None)
+        self.available_themes.pop("textual-ansi", None)
+        self.available_themes.pop("nord", None)
+        self.available_themes.pop("catppuccin-latte", None)
+        self.available_themes.pop("rose-pine-dawn", None)
+        self.available_themes.pop("atom-one-light", None)
+        self.available_themes.pop("catppuccin-frappe", None)
+        self.available_themes.pop("cattppuccin-frappe", None)
 
         # Set default theme and sync status bar
-        self.theme = "beacon-high-contrast-dark"
-        self.status_bar.theme_name = "beacon-high-contrast-dark"
+        self._suppress_theme_watch = True
+        self.theme = "beacon-warm-terminal"
+        self._suppress_theme_watch = False
+        self.status_bar.theme_name = "beacon-warm-terminal"
         self.status_bar.refresh()
         self.status_bar.refresh()
 
@@ -2301,6 +2395,11 @@ class Beacon(App):
         self.set_timer(3.0, self._init_backup_card)
         self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
         self.set_timer(60.0, lambda: self.set_interval(300, self._check_backup_timer))
+        # Hidden command-palette entries for direct theme selection.
+        self.bind("ctrl+shift+o", "set_theme_deep_ocean", description="Deep Ocean", show=False)
+        self.bind("ctrl+shift+g", "set_theme_graphite_neon", description="Graphite Neon", show=False)
+        self.bind("ctrl+shift+w", "set_theme_warm_terminal", description="Warm Terminal", show=False)
+        self.bind("ctrl+shift+b", "set_theme_beacon_midnight", description="Beacon Midnight", show=False)
         self._sync_map_offset_binding()
 
     def _loading_message(self) -> str:
@@ -3022,12 +3121,53 @@ class Beacon(App):
         next_theme = THEME_ORDER[next_idx]
         try:
             self.theme = next_theme
-            self.status_bar.theme_name = next_theme
-            self.status_bar.theme_visible = True
-            self.status_bar.refresh()
-            self.set_timer(3.0, self._hide_theme_from_status_bar)
         except Exception:
             pass
+
+    def action_set_theme_deep_ocean(self) -> None:
+        """Apply the Deep Ocean theme."""
+        try:
+            self.theme = "beacon-deep-ocean"
+        except Exception:
+            pass
+
+    def action_set_theme_graphite_neon(self) -> None:
+        """Apply the Graphite Neon theme."""
+        try:
+            self.theme = "beacon-graphite-neon"
+        except Exception:
+            pass
+
+    def action_set_theme_warm_terminal(self) -> None:
+        """Apply the Warm Terminal theme."""
+        try:
+            self.theme = "beacon-warm-terminal"
+        except Exception:
+            pass
+
+    def action_set_theme_beacon_midnight(self) -> None:
+        """Apply the Beacon Midnight theme."""
+        try:
+            self.theme = "beacon-midnight"
+        except Exception:
+            pass
+
+    def watch_theme(self, theme_name: str) -> None:
+        """Ensure any theme change path updates status bar theme visibility."""
+        if self._suppress_theme_watch:
+            return
+        if not hasattr(self, "status_bar"):
+            return
+        self._show_theme_in_status_bar(theme_name)
+
+    def _show_theme_in_status_bar(self, theme_name: str) -> None:
+        if self._theme_status_timer:
+            self._theme_status_timer.stop()
+            self._theme_status_timer = None
+        self.status_bar.theme_name = theme_name
+        self.status_bar.theme_visible = True
+        self.status_bar.refresh()
+        self._theme_status_timer = self.set_timer(5.0, self._hide_theme_from_status_bar)
 
     def _hide_theme_from_status_bar(self) -> None:
         """Hide theme name from status bar after a few seconds."""
