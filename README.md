@@ -42,7 +42,8 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 | `c` | Create new address |
 | `x` | Open send card |
 | `w` | Open sweep card |
-| `m` | Toggle map offset |
+| `m` | Toggle full screen map (auto-off after 60s) |
+| `M` | Toggle map offset (available only in fullscreen map mode) |
 | `u` | Apply update (only visible when an update is available) |
 
 ## Auto-update

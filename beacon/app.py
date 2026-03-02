@@ -1,6 +1,7 @@
 import asyncio
 import os
 import platform
+import random
 import re
 import subprocess
 import time
@@ -161,7 +162,7 @@ class CustomHeader(Static):
     
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.indicator_state = "green"  # green, yellow, blue
+        self.indicator_state = "green"  # green, yellow, blue, lightning
         self._reset_timer = None
     
     def on_mount(self) -> None:
@@ -209,6 +210,7 @@ class CustomHeader(Static):
             "green": E("🟢", "*"),
             "yellow": E("🟡", "~"),
             "blue": E("🔵", "o"),
+            "lightning": E("⚡", "!"),
         }.get(self.indicator_state, E("🟢", "*"))
         
         try:
@@ -388,6 +390,7 @@ class PeerMapCard(Static):
         self._blink_count = 0
         self._blink_timer: object = None
         self._network_node_count: int | None = None
+        self._suppress_render = False
 
     def on_mount(self) -> None:
         # Defer initial render until layout has run and we have stable dimensions
@@ -455,6 +458,8 @@ class PeerMapCard(Static):
             self._blink_visible = True
 
     def _render_map(self) -> None:
+        if self._suppress_render:
+            return
         cols, rows = self._get_map_dimensions()
         content = generate_map(
             cols,
@@ -1445,6 +1450,7 @@ THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
 
 
 class LynxTuiApp(App):
+    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e")
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh_all", "Refresh"),
@@ -1455,7 +1461,7 @@ class LynxTuiApp(App):
         ("z", "toggle_timezone_card", "Timezone"),
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
-        ("m", "toggle_map_center", "Map Offset"),
+        ("m", "toggle_fullscreen_map", "Full Screen Map"),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
 
@@ -1535,6 +1541,14 @@ class LynxTuiApp(App):
         min-width: 52;
         min-height: 22;
         text-wrap: nowrap;
+    }
+    #map-peer-map.map-fullscreen {
+        column-span: 6;
+        row-span: 5;
+        width: 1fr;
+        height: 1fr;
+        min-width: 0;
+        min-height: 0;
     }
     #overview-pricing,
     #overview-value {
@@ -1943,7 +1957,16 @@ class LynxTuiApp(App):
         self._sweep_txid_timer = None
         self._currency_card_auto_hide_timer = None
         self._timezone_card_auto_hide_timer = None
+        self._map_fullscreen_timer = None
+        self._map_fullscreen_render_timer = None
+        self._pending_peer_map_update = None
+        self._map_fullscreen_active = False
+        self._snow_effect_active = False
+        self._snow_effect_timer = None
+        self._snow_effect_stop_timer = None
+        self._snow_flakes: list[dict[str, object]] = []
         self._session_started_at_local = datetime.now(timezone.utc).astimezone()
+        self._local_block_event_notified: set[int] = set()
         self._schrodinger_block_notified: set[int] = set()
         self._update_available: str | None = None
         self._update_in_progress = False
@@ -1970,6 +1993,8 @@ class LynxTuiApp(App):
         self.send_card.display = False  # Hidden by default, press x to show
         self.sweep_card = SweepCard(id="sweep-card")
         self.sweep_card.display = False  # Hidden by default, press w to show
+        self.overview_grid = Container(id="overview-grid")
+        self.send_sweep_slot = Container(id="send-sweep-slot")
         self._difficulty_backfill_index = 0
         self._difficulty_backfill_timer = None
         self.overview_mempool = MemPoolPanel(f"{E('📋', '>')} Memory Pool", "sync", id="overview-mempool")
@@ -2030,8 +2055,38 @@ class LynxTuiApp(App):
         self._prev_peer_addresses: set[str] = set()
         self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
         self._last_node_center_lon: float | None = None
+        self._fullscreen_hidden_widgets = (
+            self.overview_network,
+            self.overview_peers,
+            self.timezone_card,
+            self.overview_addresses,
+            self.node_status_card,
+            self.block_stats_card,
+            self.send_sweep_slot,
+            self.overview_pricing,
+            self.overview_value,
+            self.currency_card,
+            self.overview_system,
+            self.overview_daemon_status,
+            self.overview_mempool,
+            self.overview_storage,
+        )
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if action == "toggle_map_center":
+            return True if self._map_fullscreen_active else False
+        if self._map_fullscreen_active and action in (
+            "refresh_all",
+            "toggle_staking",
+            "cycle_theme",
+            "create_new_address",
+            "toggle_value_currency_card",
+            "toggle_timezone_card",
+            "toggle_send_card",
+            "toggle_sweep_card",
+            "toggle_wallet_lock",
+        ):
+            return False
         if action == "toggle_wallet_lock":
             return True if self._wallet_ready else False
         if action in ("toggle_send_card", "toggle_sweep_card"):
@@ -2176,14 +2231,14 @@ class LynxTuiApp(App):
             with TabbedContent():
                 with TabPane("Overview"):
                     with Container(id="overview-body"):
-                        with Container(id="overview-grid"):
+                        with self.overview_grid:
                             yield self.overview_network
                             yield self.overview_peers
                             yield self.timezone_card
                             yield self.overview_addresses
                             yield self.node_status_card
                             yield self.block_stats_card
-                            with Container(id="send-sweep-slot"):
+                            with self.send_sweep_slot:
                                 yield self.difficulty_chart
                                 yield self.send_card
                                 yield self.sweep_card
@@ -2246,6 +2301,7 @@ class LynxTuiApp(App):
         self.set_timer(3.0, self._init_backup_card)
         self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
         self.set_timer(60.0, lambda: self.set_interval(300, self._check_backup_timer))
+        self._sync_map_offset_binding()
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -2371,6 +2427,9 @@ class LynxTuiApp(App):
         self._show_timezone_card = active
         self.timezone_card.display = active
         self.overview_peers.display = not active
+        if self._map_fullscreen_active:
+            self.timezone_card.display = False
+            self.overview_peers.display = False
         if self._timezone_card_auto_hide_timer:
             self._timezone_card_auto_hide_timer.stop()
             self._timezone_card_auto_hide_timer = None
@@ -2388,6 +2447,10 @@ class LynxTuiApp(App):
         self.currency_card.display = active
         self.overview_value.display = not active
         self.overview_daemon_status.display = not active
+        if self._map_fullscreen_active:
+            self.currency_card.display = False
+            self.overview_value.display = False
+            self.overview_daemon_status.display = False
         if self._currency_card_auto_hide_timer:
             self._currency_card_auto_hide_timer.stop()
             self._currency_card_auto_hide_timer = None
@@ -2400,9 +2463,158 @@ class LynxTuiApp(App):
             return
         self._set_currency_card_active(False)
 
+    def action_toggle_fullscreen_map(self) -> None:
+        """Toggle temporary fullscreen map view (bound to M key)."""
+        self._set_fullscreen_map_active(not self._map_fullscreen_active)
+
+    def _set_fullscreen_map_active(self, active: bool) -> None:
+        self._map_fullscreen_active = active
+        if self._map_fullscreen_render_timer:
+            self._map_fullscreen_render_timer.stop()
+            self._map_fullscreen_render_timer = None
+        for widget in self._fullscreen_hidden_widgets:
+            widget.display = not active
+        if active:
+            self.overview_grid.styles.grid_rows = "1fr"
+            self.peer_map.add_class("map-fullscreen")
+            self.peer_map._suppress_render = True
+            self.peer_map.styles.column_span = 6
+            self.peer_map.styles.row_span = 1
+            self.peer_map.styles.min_width = 0
+            self.peer_map.styles.min_height = 0
+        else:
+            self.overview_grid.styles.grid_rows = "22 auto 9fr 10fr 7fr"
+            self.peer_map.remove_class("map-fullscreen")
+            self.peer_map._suppress_render = True
+            self.peer_map.styles.column_span = 4
+            self.peer_map.styles.row_span = 3
+            self.peer_map.styles.min_width = 52
+            self.peer_map.styles.min_height = 22
+        if self._map_fullscreen_timer:
+            self._map_fullscreen_timer.stop()
+            self._map_fullscreen_timer = None
+        if active:
+            self._map_fullscreen_timer = self.set_timer(60.0, self._auto_deactivate_fullscreen_map)
+        self._sync_overview_visibility_after_map_fullscreen()
+        self.peer_map.refresh(layout=True)
+        if active:
+            self.peer_map.styles.content_align = ("center", "middle")
+            self.peer_map.update("Preparing higher resolution global map view...")
+            self._map_fullscreen_render_timer = self.set_timer(0.5, self._render_fullscreen_map_after_layout)
+        else:
+            self.peer_map.styles.content_align = ("center", "middle")
+            self.peer_map.update(
+                "A Platform, Not Just a Blockchain\n\n"
+                "Rather than limiting storage capacity to a single\n"
+                "blockchain, Lynx operates as a comprehensive\n"
+                "storage platform managing over 400 independent\n"
+                "blockchain networks.\n\n"
+                "Beacon is your control center."
+            )
+            self._map_fullscreen_render_timer = self.set_timer(5.0, self._render_restored_map_after_message)
+        self._sync_fullscreen_map_binding()
+        self._sync_fullscreen_hotkeys()
+        self._sync_map_offset_binding()
+        self._sync_update_binding()
+
+    def _auto_deactivate_fullscreen_map(self) -> None:
+        self._map_fullscreen_timer = None
+        if not self._map_fullscreen_active:
+            return
+        self._set_fullscreen_map_active(False)
+
+    def _render_fullscreen_map_after_layout(self) -> None:
+        self._map_fullscreen_render_timer = None
+        if not self._map_fullscreen_active:
+            return
+        self.peer_map._suppress_render = False
+        self.peer_map.styles.content_align = ("left", "top")
+        self.peer_map.refresh(layout=True)
+        if self._pending_peer_map_update:
+            peer_locs, total_count, center_lon, blink_indices = self._pending_peer_map_update
+            self._pending_peer_map_update = None
+            self.peer_map.update_peers(
+                peer_locs,
+                total_count=total_count,
+                center_lon=center_lon,
+                blink_indices=blink_indices,
+            )
+            return
+        self._refresh_peer_map_center()
+
+    def _render_restored_map_after_message(self) -> None:
+        self._map_fullscreen_render_timer = None
+        if self._map_fullscreen_active:
+            return
+        self.peer_map._suppress_render = False
+        self.peer_map.styles.content_align = ("left", "top")
+        self.peer_map.refresh(layout=True)
+        if self._pending_peer_map_update:
+            peer_locs, total_count, center_lon, blink_indices = self._pending_peer_map_update
+            self._pending_peer_map_update = None
+            self.peer_map.update_peers(
+                peer_locs,
+                total_count=total_count,
+                center_lon=center_lon,
+                blink_indices=blink_indices,
+            )
+            return
+        self._refresh_peer_map_center()
+
+    def _sync_overview_visibility_after_map_fullscreen(self) -> None:
+        if self._map_fullscreen_active:
+            return
+        self.overview_network.display = True
+        self.overview_addresses.display = True
+        self.node_status_card.display = True
+        self.block_stats_card.display = True
+        self.send_sweep_slot.display = True
+        self.overview_pricing.display = True
+        self.overview_system.display = True
+        self.overview_mempool.display = True
+        self.overview_storage.display = True
+        self.overview_peers.display = not self._show_timezone_card
+        self.timezone_card.display = self._show_timezone_card
+        self.currency_card.display = self._show_currency_card
+        self.overview_value.display = not self._show_currency_card
+        self.overview_daemon_status.display = not self._show_currency_card
+
+    def _refresh_peer_map_center(self) -> None:
+        effective_center = self._last_node_center_lon if self._map_center_on_node else None
+        if self.peer_map._suppress_render and self._map_fullscreen_render_timer is not None:
+            self._pending_peer_map_update = (
+                self.peer_map._peer_locations,
+                self.peer_map._total_count,
+                effective_center,
+                list(self.peer_map._blink_indices),
+            )
+            return
+        self.peer_map.update_peers(
+            self.peer_map._peer_locations,
+            total_count=self.peer_map._total_count,
+            center_lon=effective_center,
+        )
+
+    def _update_peer_map_or_defer(
+        self,
+        peer_locs: list[tuple[float, float]],
+        total_count: int,
+        center_lon: float | None,
+        blink_indices: list[int] | None = None,
+    ) -> None:
+        if self.peer_map._suppress_render and self._map_fullscreen_render_timer is not None:
+            self._pending_peer_map_update = (peer_locs, total_count, center_lon, blink_indices)
+            return
+        self.peer_map.update_peers(
+            peer_locs,
+            total_count=total_count,
+            center_lon=center_lon,
+            blink_indices=blink_indices,
+        )
+
     def _maybe_notify_schrodinger_block(self, block_height: int | None, block_hash: str | None) -> None:
-        """Notify if a local CheckStake win occurred within 30s of session start."""
-        if block_height is None or block_height in self._schrodinger_block_notified:
+        """Notify local block discovery; use Schrödinger toast when startup window matches."""
+        if block_height is None or block_height in self._local_block_event_notified:
             return
         checkstake_ts = self.logs.find_latest_checkstake_before_updatetip(
             height=block_height,
@@ -2410,25 +2622,29 @@ class LynxTuiApp(App):
         )
         if checkstake_ts is None:
             return
+        self._local_block_event_notified.add(block_height)
         elapsed = (checkstake_ts - self._session_started_at_local).total_seconds()
+        self.header.set_indicator("lightning")
         if 0 <= elapsed <= 30:
             self.notify(
                 "You've won a Schrödinger Block. This is very unusual. It only happens when you log into your Beacon session, and your staking node immediately wins a stake on the network. Congratulations!!! Curious, do you have a cat?",
-                title="Schrodinger Block",
+                title=f"{E('⚡', '!')} Schrodinger Block",
                 severity="information",
                 timeout=12,
             )
             self._schrodinger_block_notified.add(block_height)
+            return
+        self.notify(
+            "Your local node discovered a new proof-of-stake block.",
+            title=f"{E('⚡', '!')} Local Block Found",
+            severity="information",
+            timeout=8,
+        )
 
     def action_toggle_map_center(self) -> None:
         """Toggle map view between default (Americas west) and centered on node (m key)."""
         self._map_center_on_node = not self._map_center_on_node
-        effective_center = self._last_node_center_lon if self._map_center_on_node else None
-        self.peer_map.update_peers(
-            self.peer_map._peer_locations,
-            total_count=self.peer_map._total_count,
-            center_lon=effective_center,
-        )
+        self._refresh_peer_map_center()
         mode = "Estimated Daemon Location" if self._map_center_on_node else "Default View"
         self.notify(f"Map view: {mode}", title="Map", timeout=2)
 
@@ -3446,7 +3662,7 @@ class LynxTuiApp(App):
         effective_center = center_lon if self._map_center_on_node else None
         self._schedule_update(
             0.25,
-            lambda: self.peer_map.update_peers(
+            lambda: self._update_peer_map_or_defer(
                 peer_locs,
                 total_count=peer_count,
                 center_lon=effective_center,
@@ -3660,7 +3876,7 @@ class LynxTuiApp(App):
         try:
             req = urllib.request.Request(
                 CRYPTOID_NODES_URL,
-                headers={"User-Agent": "Beacon/1.0"},
+                headers={"User-Agent": f"Beacon/{BEACON_VERSION}"},
             )
             with urllib.request.urlopen(req, timeout=20) as resp:
                 raw = resp.read()
@@ -3828,6 +4044,11 @@ class LynxTuiApp(App):
     def _sync_update_binding(self) -> None:
         """Show or hide the 'u' key in the footer based on update availability."""
         has_binding = "u" in self._bindings.key_to_bindings
+        if self._map_fullscreen_active:
+            if has_binding:
+                self._bindings.key_to_bindings.pop("u", None)
+            self.refresh_bindings()
+            return
         if self._update_available and not has_binding:
             self.bind("u", "apply_update", description=f"Update {E('⬆', '^')}")
         elif not self._update_available and has_binding:
@@ -3856,12 +4077,7 @@ class LynxTuiApp(App):
 
     def _sync_wallet_binding(self) -> None:
         """Update the (e) key footer label to reflect current wallet state."""
-        labels = {
-            "unencrypted": "Encrypt Wallet",
-            "locked": "Unlock Wallet",
-            "unlocked": "Lock Wallet",
-        }
-        label = labels.get(self._wallet_lock_state, "Encrypt Wallet")
+        label = self._wallet_binding_label()
         bindings_list = self._bindings.key_to_bindings.get("e")
         if bindings_list:
             self._bindings.key_to_bindings["e"] = [
@@ -3869,6 +4085,141 @@ class LynxTuiApp(App):
             ]
         self.refresh_bindings()
         self._schedule_send_sweep_reset_if_hidden()
+
+    def _wallet_binding_label(self) -> str:
+        labels = {
+            "unencrypted": "Encrypt Wallet",
+            "locked": "Unlock Wallet",
+            "unlocked": "Lock Wallet",
+        }
+        return labels.get(self._wallet_lock_state, "Encrypt Wallet")
+
+    def _sync_fullscreen_hotkeys(self) -> None:
+        """Hide selected hotkeys during fullscreen map, restore when leaving it."""
+        if self._map_fullscreen_active:
+            for key in self.FULLSCREEN_HIDDEN_BINDINGS:
+                self._bindings.key_to_bindings.pop(key, None)
+            self.refresh_bindings()
+            return
+        desired = {
+            "r": ("refresh_all", "Refresh"),
+            "s": ("toggle_staking", "Staking"),
+            "t": ("cycle_theme", "Theme"),
+            "c": ("create_new_address", "New Address"),
+            "p": ("toggle_value_currency_card", "Currency"),
+            "z": ("toggle_timezone_card", "Timezone"),
+            "x": ("toggle_send_card", "Send"),
+            "w": ("toggle_sweep_card", "Sweep"),
+            "e": ("toggle_wallet_lock", self._wallet_binding_label()),
+        }
+        for key, (action, description) in desired.items():
+            if key not in self._bindings.key_to_bindings:
+                self.bind(key, action, description=description)
+        self.refresh_bindings()
+
+    def _sync_map_offset_binding(self) -> None:
+        """Show map offset hotkey only during fullscreen map mode."""
+        has_binding = "M" in self._bindings.key_to_bindings
+        if self._map_fullscreen_active and not has_binding:
+            self.bind("M", "toggle_map_center", description="Map Offset")
+        elif not self._map_fullscreen_active and has_binding:
+            self._bindings.key_to_bindings.pop("M", None)
+        self.refresh_bindings()
+
+    def action_test_snow_effect(self) -> None:
+        """Temporary hotkey action for a snow + celebration overlay test."""
+        if self._snow_effect_active:
+            self._stop_snow_effect()
+            return
+        self._start_snow_effect(duration=30.0)
+
+    def _start_snow_effect(self, duration: float = 4.0) -> None:
+        if self._snow_effect_timer:
+            self._snow_effect_timer.stop()
+            self._snow_effect_timer = None
+        if self._snow_effect_stop_timer:
+            self._snow_effect_stop_timer.stop()
+            self._snow_effect_stop_timer = None
+        cols, rows = self.peer_map._get_map_dimensions()
+        flake_count = max(24, cols // 3)
+        chars = [".", "*", "+"]
+        self._snow_flakes = [
+            {
+                "x": random.randint(0, max(0, cols - 1)),
+                "y": random.randint(0, max(0, rows - 1)),
+                "ch": random.choice(chars),
+            }
+            for _ in range(flake_count)
+        ]
+        self._snow_effect_active = True
+        self.peer_map._suppress_render = True
+        self.peer_map.styles.content_align = ("left", "top")
+        self._render_snow_frame(cols, rows)
+        self._snow_effect_timer = self.set_interval(0.12, self._snow_tick)
+        self._snow_effect_stop_timer = self.set_timer(duration, self._stop_snow_effect)
+
+    def _snow_tick(self) -> None:
+        if not self._snow_effect_active:
+            return
+        cols, rows = self.peer_map._get_map_dimensions()
+        max_x = max(0, cols - 1)
+        max_y = max(0, rows - 1)
+        for flake in self._snow_flakes:
+            x = int(flake["x"])
+            y = int(flake["y"]) + 1
+            drift = random.choice((-1, 0, 0, 1))
+            x = min(max(0, x + drift), max_x)
+            if y > max_y:
+                y = 0
+                x = random.randint(0, max_x)
+            flake["x"] = x
+            flake["y"] = y
+        self._render_snow_frame(cols, rows)
+
+    def _render_snow_frame(self, cols: int, rows: int) -> None:
+        grid = [[" " for _ in range(max(1, cols))] for _ in range(max(1, rows))]
+        for flake in self._snow_flakes:
+            x = int(flake["x"])
+            y = int(flake["y"])
+            if 0 <= y < len(grid) and 0 <= x < len(grid[0]):
+                grid[y][x] = str(flake["ch"])
+        message_lines = [
+            "Congratulations - we staked a block on the global network.",
+            "We won the reward plus fees. Press n to dismiss this message.",
+        ]
+        if rows >= 4 and cols >= 40:
+            start_row = max(0, (rows // 2) - 1)
+            for i, line in enumerate(message_lines):
+                target_row = start_row + i
+                if target_row >= rows:
+                    break
+                trimmed = line[:cols]
+                start_col = max(0, (cols - len(trimmed)) // 2)
+                for j, ch in enumerate(trimmed):
+                    if start_col + j < cols:
+                        grid[target_row][start_col + j] = ch
+        self.peer_map.update("\n".join("".join(row) for row in grid))
+
+    def _stop_snow_effect(self) -> None:
+        if self._snow_effect_timer:
+            self._snow_effect_timer.stop()
+            self._snow_effect_timer = None
+        if self._snow_effect_stop_timer:
+            self._snow_effect_stop_timer.stop()
+            self._snow_effect_stop_timer = None
+        self._snow_effect_active = False
+        self.peer_map._suppress_render = False
+        self._refresh_peer_map_center()
+
+    def _sync_fullscreen_map_binding(self) -> None:
+        """Update M key label based on fullscreen map state."""
+        label = "Restore Small Map" if self._map_fullscreen_active else "Full Screen Map"
+        bindings_list = self._bindings.key_to_bindings.get("m")
+        if bindings_list:
+            self._bindings.key_to_bindings["m"] = [
+                dataclass_replace(b, description=label) for b in bindings_list
+            ]
+        self.refresh_bindings()
 
     async def _check_for_update(self) -> None:
         """Periodic check: compare local version against latest GitHub release."""
