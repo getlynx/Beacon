@@ -15,6 +15,22 @@ class LogTailer:
                 self.log_path = fallback_path
         self.max_lines = 200
 
+    @staticmethod
+    def _parse_line_timestamp_local(line: str) -> datetime | None:
+        """Parse a debug.log timestamp and return local timezone datetime."""
+        date_re = re.compile(r"\bdate='([^']+)'|\bdate=(\S+)")
+        date_match = date_re.search(line)
+        if date_match:
+            timestamp = (date_match.group(1) or date_match.group(2) or "").strip()
+        else:
+            timestamp = line.split(" ", 1)[0].strip()
+        if not timestamp:
+            return None
+        try:
+            return datetime.fromisoformat(timestamp.replace("Z", "+00:00")).astimezone()
+        except Exception:
+            return None
+
     def tail_lines(self) -> list[str]:
         if not self.log_path.exists():
             return ["debug.log not found"]
@@ -138,3 +154,56 @@ class LogTailer:
                 return line.strip().replace("\r", "").replace("\n", "")
         
         return "Block Statistics: Not yet available"
+
+    def find_latest_checkstake_before_updatetip(
+        self,
+        height: int | None = None,
+        block_hash: str | None = None,
+        search_back_lines: int = 400,
+    ) -> datetime | None:
+        """Find latest CheckStake timestamp preceding a matching UpdateTip line."""
+        if not self.log_path.exists():
+            return None
+        try:
+            lines = self.log_path.read_text(errors="ignore").splitlines()
+        except Exception:
+            return None
+        if not lines:
+            return None
+
+        height_re = re.compile(r"\bheight=(\d+)\b")
+        hash_re = re.compile(r"(?:best|hash)=([0-9a-fA-F]{8,64})")
+        fallback_hash_re = re.compile(r"\b([0-9a-fA-F]{8,64})\b")
+        target_hash = block_hash.lower() if isinstance(block_hash, str) and block_hash else None
+
+        update_tip_index: int | None = None
+        for idx in range(len(lines) - 1, -1, -1):
+            line = lines[idx]
+            if "UpdateTip" not in line:
+                continue
+            if height is not None:
+                hm = height_re.search(line)
+                if not hm or int(hm.group(1)) != height:
+                    continue
+            if target_hash is not None:
+                hash_match = hash_re.search(line) or fallback_hash_re.search(line)
+                if not hash_match:
+                    continue
+                line_hash = hash_match.group(1).lower()
+                if line_hash != target_hash and not line_hash.startswith(target_hash[:8]):
+                    continue
+            update_tip_index = idx
+            break
+
+        if update_tip_index is None:
+            return None
+
+        floor = max(0, update_tip_index - search_back_lines)
+        for idx in range(update_tip_index - 1, floor - 1, -1):
+            line = lines[idx]
+            if "CheckStake" not in line:
+                continue
+            parsed = self._parse_line_timestamp_local(line)
+            if parsed is not None:
+                return parsed
+        return None

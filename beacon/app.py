@@ -1943,6 +1943,8 @@ class LynxTuiApp(App):
         self._sweep_txid_timer = None
         self._currency_card_auto_hide_timer = None
         self._timezone_card_auto_hide_timer = None
+        self._session_started_at_local = datetime.now(timezone.utc).astimezone()
+        self._schrodinger_block_notified: set[int] = set()
         self._update_available: str | None = None
         self._update_in_progress = False
         try:
@@ -2397,6 +2399,26 @@ class LynxTuiApp(App):
         if not self._show_currency_card:
             return
         self._set_currency_card_active(False)
+
+    def _maybe_notify_schrodinger_block(self, block_height: int | None, block_hash: str | None) -> None:
+        """Notify if a local CheckStake win occurred within 30s of session start."""
+        if block_height is None or block_height in self._schrodinger_block_notified:
+            return
+        checkstake_ts = self.logs.find_latest_checkstake_before_updatetip(
+            height=block_height,
+            block_hash=block_hash,
+        )
+        if checkstake_ts is None:
+            return
+        elapsed = (checkstake_ts - self._session_started_at_local).total_seconds()
+        if 0 <= elapsed <= 30:
+            self.notify(
+                "You've won a Schrödinger Block. This is very unusual. It only happens when you log into your Beacon session, and your staking node immediately wins a stake on the network. Congratulations!!! Curious, do you have a cat?",
+                title="Schrodinger Block",
+                severity="information",
+                timeout=12,
+            )
+            self._schrodinger_block_notified.add(block_height)
 
     def action_toggle_map_center(self) -> None:
         """Toggle map view between default (Americas west) and centered on node (m key)."""
@@ -3507,6 +3529,14 @@ class LynxTuiApp(App):
                                     title="New block",
                                     timeout=15,
                                 )
+                                try:
+                                    h_int = int(h)
+                                except (TypeError, ValueError):
+                                    h_int = bh
+                                self._maybe_notify_schrodinger_block(
+                                    h_int,
+                                    hsh if isinstance(hsh, str) else best_hash,
+                                )
                                 pos_diff = _extract_pos_difficulty(block.get("difficulty"))
                                 self.difficulty_chart.update_difficulty(pos_diff, prepend=True)
                             else:
@@ -3515,9 +3545,11 @@ class LynxTuiApp(App):
                                     title="New block",
                                     timeout=15,
                                 )
+                                self._maybe_notify_schrodinger_block(bh, best_hash)
                         self.call_later(_fetch_and_notify)
                     else:
                         self.notify(f"Height {bh}", title="New block", timeout=15)
+                        self._maybe_notify_schrodinger_block(bh, None)
             
             # Update staking status on card: use tracked state if available, otherwise show sync state
             staking_status = (
