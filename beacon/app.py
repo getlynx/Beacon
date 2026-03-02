@@ -1449,7 +1449,7 @@ THEME_ORDER = list(BUILTIN_THEMES.keys()) + [
 ]
 
 
-class LynxTuiApp(App):
+class Beacon(App):
     FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e")
     BINDINGS = [
         ("q", "quit", "Quit"),
@@ -2223,7 +2223,7 @@ class LynxTuiApp(App):
             return ["Unavailable"]
         def clean_label(lbl: str) -> str:
             return lbl.replace(" (Kb)", "").replace(" (kb)", "").replace(" (KB)", "")
-        return [f"{clean_label(label)}: {LynxTuiApp._format_capacity_kb(val)}" for label, val in pairs]
+        return [f"{clean_label(label)}: {Beacon._format_capacity_kb(val)}" for label, val in pairs]
 
     def compose(self) -> ComposeResult:
         yield self.header
@@ -4301,4 +4301,4 @@ class LynxTuiApp(App):
 
 
 def run() -> None:
-    LynxTuiApp().run()
+    Beacon().run()
