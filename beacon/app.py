@@ -987,14 +987,15 @@ class NetworkActivityPanel(VerticalScroll):
         self._difficulties = difficulties
         self._syncing = syncing
         if count is not None:
-            self.border_title = f"{self.title} ({count})"
+            self.border_title = f"{self.title} (latest {count} blocks)"
         else:
             self.border_title = self.title
         if time_since_latest:
-            self.border_subtitle = time_since_latest
+            self.border_subtitle = f"Ordered by block height | {time_since_latest}"
             self.border_subtitle_align = ("right", "bottom")
         else:
-            self.border_subtitle = ""
+            self.border_subtitle = "Ordered by block height"
+            self.border_subtitle_align = ("right", "bottom")
         if not entries:
             self._content.update("... loading")
             return
@@ -1116,8 +1117,6 @@ class TimezoneCard(VerticalScroll):
         self._timezone_status = timezone_status
 
     def compose(self) -> ComposeResult:
-        yield self._timezone_status
-        yield Static("", id="timezone-status-spacer")
         yield self._timezone_select
         yield Static("", id="timezone-spacer")
         with Container(id="timezone-actions"):
@@ -1453,6 +1452,7 @@ class LynxTuiApp(App):
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
         ("p", "toggle_value_currency_card", "Currency"),
+        ("z", "toggle_timezone_card", "Timezone"),
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_map_center", "Map Offset"),
@@ -1723,9 +1723,13 @@ class LynxTuiApp(App):
         height: 1fr;
         width: 1fr;
     }
-    #timezone-card {
-        width: 1fr;
-        height: 22;
+    #overview-timezone {
+        min-height: 18;
+        height: 1fr;
+        overflow-x: hidden;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
+        overflow-y: scroll;
     }
     #overview-currency {
         width: 1fr;
@@ -1938,6 +1942,7 @@ class LynxTuiApp(App):
         self._send_txid_timer = None
         self._sweep_txid_timer = None
         self._currency_card_auto_hide_timer = None
+        self._timezone_card_auto_hide_timer = None
         self._update_available: str | None = None
         self._update_in_progress = False
         try:
@@ -1984,12 +1989,14 @@ class LynxTuiApp(App):
         self.timezone_apply = Button("Apply", id="timezone-apply")
         self.timezone_status = Static("", id="timezone-status")
         self.timezone_card = TimezoneCard(
-            "Timezone",
+            f"{E('🕒', 'T')} Timezone (unknown)",
             self.timezone_select,
             self.timezone_apply,
             self.timezone_status,
-            id="timezone-card",
+            id="overview-timezone",
         )
+        self.timezone_card.display = False
+        self._show_timezone_card = False
         self.currency_select = AlternatingSelectionList(id="currency-select")
         self.currency_apply = Button("Apply", id="currency-apply")
         self.currency_status = Static("", id="currency-status")
@@ -2170,6 +2177,7 @@ class LynxTuiApp(App):
                         with Container(id="overview-grid"):
                             yield self.overview_network
                             yield self.overview_peers
+                            yield self.timezone_card
                             yield self.overview_addresses
                             yield self.node_status_card
                             yield self.block_stats_card
@@ -2187,8 +2195,6 @@ class LynxTuiApp(App):
                             yield self.overview_storage
                 with TabPane("Settings"):
                     with Container(id="settings"):
-                        yield self.timezone_card
-                        yield self.share_card
                         yield self.firewall_card
                         yield self.backup_card
         yield self.status_bar
@@ -2309,6 +2315,11 @@ class LynxTuiApp(App):
             self.timezone_status.update(f"Current timezone: {current}")
         else:
             self.timezone_status.update("Current timezone: unknown")
+        self._update_timezone_card_title(current)
+
+    def _update_timezone_card_title(self, timezone_name: str | None) -> None:
+        tz_display = timezone_name if timezone_name and timezone_name != "unknown" else "unknown"
+        self.timezone_card.border_title = f"{E('🕒', 'T')} Timezone ({tz_display})"
 
     async def refresh_timezone_list(self) -> None:
         timezones = await asyncio.get_event_loop().run_in_executor(None, self.system.list_timezones)
@@ -2316,6 +2327,7 @@ class LynxTuiApp(App):
             self.timezone_status.update("Unable to load timezone list.")
             return
         current = await asyncio.get_event_loop().run_in_executor(None, self.system.get_timezone)
+        self._update_timezone_card_title(current)
         self.timezone_select.clear_options()
         options = [(tz, tz, tz == current) for tz in timezones]
         self.timezone_select.add_options(options)
@@ -2348,6 +2360,26 @@ class LynxTuiApp(App):
     def action_toggle_value_currency_card(self) -> None:
         """Toggle Overview Value/Daemon slots with Currency card (bound to p key)."""
         self._set_currency_card_active(not self._show_currency_card)
+
+    def action_toggle_timezone_card(self) -> None:
+        """Toggle Overview Peers/Timezone cards (bound to z key)."""
+        self._set_timezone_card_active(not self._show_timezone_card)
+
+    def _set_timezone_card_active(self, active: bool) -> None:
+        self._show_timezone_card = active
+        self.timezone_card.display = active
+        self.overview_peers.display = not active
+        if self._timezone_card_auto_hide_timer:
+            self._timezone_card_auto_hide_timer.stop()
+            self._timezone_card_auto_hide_timer = None
+        if active:
+            self._timezone_card_auto_hide_timer = self.set_timer(60.0, self._auto_deactivate_timezone_card)
+
+    def _auto_deactivate_timezone_card(self) -> None:
+        self._timezone_card_auto_hide_timer = None
+        if not self._show_timezone_card:
+            return
+        self._set_timezone_card_active(False)
 
     def _set_currency_card_active(self, active: bool) -> None:
         self._show_currency_card = active
