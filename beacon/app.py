@@ -1135,6 +1135,9 @@ class SweepCard(VerticalScroll):
             placeholder="Paste destination address",
             id="sweep-address",
         )
+        # Enforce Sweep address width at widget level to avoid CSS precedence issues.
+        self._address_input.styles.width = 52
+        self._address_input.styles.max_width = 52
         self._status = Static("", id="sweep-status")
 
     def compose(self) -> ComposeResult:
@@ -1680,8 +1683,8 @@ class Beacon(App):
         height: auto;
     }
     #send-inputs-row #send-address {
-        width: 38;
-        max-width: 38;
+        width: 44;
+        max-width: 44;
         margin-right: 1;
         height: 3;
     }
@@ -1713,7 +1716,7 @@ class Beacon(App):
         height: 9;
         min-height: 6;
         max-height: 9;
-        padding: 2 2 1 2;
+        padding: 2 0 1 0;
         align: center middle;
         align-horizontal: center;
     }
@@ -1723,16 +1726,20 @@ class Beacon(App):
         height: auto;
     }
     #sweep-inputs-row #sweep-address {
-        width: 38;
-        max-width: 38;
-        margin-right: 1;
+        width: 52;
+        max-width: 52;
+        margin-right: 0;
         height: 3;
     }
     #sweep-inputs-row #sweep-button {
         min-width: 8;
         width: auto;
-        padding: 0 2;
+        padding: 0 1;
         height: 3;
+    }
+    #sweep-card Input {
+        margin: 0;
+        padding: 0 1;
     }
     #sweep-card #sweep-status {
         width: auto;
@@ -2039,6 +2046,8 @@ class Beacon(App):
         self._node_version: str | None = None
         self._send_txid_timer = None
         self._sweep_txid_timer = None
+        self._send_card_idle_timer = None
+        self._sweep_card_idle_timer = None
         self._currency_card_auto_hide_timer = None
         self._timezone_card_auto_hide_timer = None
         self._map_fullscreen_timer = None
@@ -2504,15 +2513,61 @@ class Beacon(App):
         """Toggle Send card visibility (bound to x key). Hides Sweep and Difficulty chart if active."""
         if self.sweep_card.display:
             self.sweep_card.display = False
+            self._cancel_sweep_idle_timer()
         self.send_card.display = not self.send_card.display
+        if self.send_card.display:
+            self._reset_send_idle_timer()
+        else:
+            self._cancel_send_idle_timer()
         self.difficulty_chart.display = not (self.send_card.display or self.sweep_card.display)
 
     def action_toggle_sweep_card(self) -> None:
         """Toggle Sweep card visibility (bound to w key). Hides Send and Difficulty chart if active."""
         if self.send_card.display:
             self.send_card.display = False
+            self._cancel_send_idle_timer()
         self.sweep_card.display = not self.sweep_card.display
+        if self.sweep_card.display:
+            self._reset_sweep_idle_timer()
+        else:
+            self._cancel_sweep_idle_timer()
         self.difficulty_chart.display = not (self.send_card.display or self.sweep_card.display)
+
+    def _reset_send_idle_timer(self) -> None:
+        if self._send_card_idle_timer:
+            self._send_card_idle_timer.stop()
+            self._send_card_idle_timer = None
+        self._send_card_idle_timer = self.set_timer(60.0, self._auto_close_send_card)
+
+    def _reset_sweep_idle_timer(self) -> None:
+        if self._sweep_card_idle_timer:
+            self._sweep_card_idle_timer.stop()
+            self._sweep_card_idle_timer = None
+        self._sweep_card_idle_timer = self.set_timer(60.0, self._auto_close_sweep_card)
+
+    def _cancel_send_idle_timer(self) -> None:
+        if self._send_card_idle_timer:
+            self._send_card_idle_timer.stop()
+            self._send_card_idle_timer = None
+
+    def _cancel_sweep_idle_timer(self) -> None:
+        if self._sweep_card_idle_timer:
+            self._sweep_card_idle_timer.stop()
+            self._sweep_card_idle_timer = None
+
+    def _auto_close_send_card(self) -> None:
+        self._send_card_idle_timer = None
+        if not self.send_card.display:
+            return
+        self.send_card.display = False
+        self.difficulty_chart.display = not self.sweep_card.display
+
+    def _auto_close_sweep_card(self) -> None:
+        self._sweep_card_idle_timer = None
+        if not self.sweep_card.display:
+            return
+        self.sweep_card.display = False
+        self.difficulty_chart.display = not self.send_card.display
 
     def action_toggle_value_currency_card(self) -> None:
         """Toggle Overview Value/Daemon slots with Currency card (bound to p key)."""
@@ -2760,6 +2815,7 @@ class Beacon(App):
 
     async def _handle_send(self) -> None:
         """Handle Send button press: validate, call RPC, notify, refresh."""
+        self._reset_send_idle_timer()
         try:
             send_card = self.query_one("#send-card", SendCard)
         except Exception:
@@ -2802,6 +2858,7 @@ class Beacon(App):
 
     async def _handle_sweep(self) -> None:
         """Handle Sweep button press: validate address, sweep full balance, show txid."""
+        self._reset_sweep_idle_timer()
         try:
             sweep_card = self.query_one("#sweep-card", SweepCard)
         except Exception:
@@ -3281,6 +3338,13 @@ class Beacon(App):
             selected = event.selection_list.selected
             self.backup_card._selected_path = str(selected[0]) if selected else None
             self.backup_card._restore_btn.disabled = self.backup_card._selected_path is None
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        input_id = event.input.id or ""
+        if input_id in ("send-address", "send-amount") and self.send_card.display:
+            self._reset_send_idle_timer()
+        elif input_id == "sweep-address" and self.sweep_card.display:
+            self._reset_sweep_idle_timer()
 
     def _schedule_update(self, delay: float, callback: callable) -> None:
         self.set_timer(delay, callback)
@@ -4213,6 +4277,8 @@ class Beacon(App):
         """Hide Send/Sweep cards and show difficulty chart."""
         self.send_card.display = False
         self.sweep_card.display = False
+        self._cancel_send_idle_timer()
+        self._cancel_sweep_idle_timer()
         self.difficulty_chart.display = True
 
     def _sync_wallet_binding(self) -> None:
