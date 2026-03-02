@@ -1141,8 +1141,6 @@ class CurrencyCard(VerticalScroll):
         self._currency_status = currency_status
 
     def compose(self) -> ComposeResult:
-        yield self._currency_status
-        yield Static("", id="currency-status-spacer")
         yield self._currency_select
         yield Static("", id="currency-spacer")
         with Container(id="currency-actions"):
@@ -1454,6 +1452,7 @@ class LynxTuiApp(App):
         ("s", "toggle_staking", "Staking"),
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
+        ("p", "toggle_value_currency_card", "Currency"),
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_map_center", "Map Offset"),
@@ -1728,9 +1727,15 @@ class LynxTuiApp(App):
         width: 1fr;
         height: 22;
     }
-    #currency-card {
+    #overview-currency {
         width: 1fr;
-        height: 22;
+        column-span: 1;
+        row-span: 2;
+        height: 1fr;
+        min-height: 6;
+        overflow-y: scroll;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
     }
     #share-card-settings {
         width: 1fr;
@@ -1932,6 +1937,7 @@ class LynxTuiApp(App):
         self._node_version: str | None = None
         self._send_txid_timer = None
         self._sweep_txid_timer = None
+        self._currency_card_auto_hide_timer = None
         self._update_available: str | None = None
         self._update_in_progress = False
         try:
@@ -1988,12 +1994,14 @@ class LynxTuiApp(App):
         self.currency_apply = Button("Apply", id="currency-apply")
         self.currency_status = Static("", id="currency-status")
         self.currency_card = CurrencyCard(
-            "Currency",
+            f"{E('💵', '$')} Currency (USD)",
             self.currency_select,
             self.currency_apply,
             self.currency_status,
-            id="currency-card",
+            id="overview-currency",
         )
+        self.currency_card.display = False
+        self._show_currency_card = False
         self.share_card = ShareCard(id="share-card-settings")
         self.firewall_card = FirewallCard(id="firewall-card")
         self.backup_card = BackupCard(id="backup-card")
@@ -2171,6 +2179,7 @@ class LynxTuiApp(App):
                                 yield self.sweep_card
                             yield self.overview_pricing
                             yield self.overview_value
+                            yield self.currency_card
                             yield self.peer_map
                             yield self.overview_system
                             yield self.overview_daemon_status
@@ -2179,7 +2188,6 @@ class LynxTuiApp(App):
                 with TabPane("Settings"):
                     with Container(id="settings"):
                         yield self.timezone_card
-                        yield self.currency_card
                         yield self.share_card
                         yield self.firewall_card
                         yield self.backup_card
@@ -2321,7 +2329,7 @@ class LynxTuiApp(App):
             for prompt, code in SUPPORTED_CURRENCIES
         ]
         self.currency_select.add_options(options)
-        self.currency_status.update(f"Display currency: {self._currency}")
+        self.currency_card.border_title = f"{E('💵', '$')} Currency ({self._currency})"
 
     def action_toggle_send_card(self) -> None:
         """Toggle Send card visibility (bound to x key). Hides Sweep and Difficulty chart if active."""
@@ -2336,6 +2344,27 @@ class LynxTuiApp(App):
             self.send_card.display = False
         self.sweep_card.display = not self.sweep_card.display
         self.difficulty_chart.display = not (self.send_card.display or self.sweep_card.display)
+
+    def action_toggle_value_currency_card(self) -> None:
+        """Toggle Overview Value/Daemon slots with Currency card (bound to p key)."""
+        self._set_currency_card_active(not self._show_currency_card)
+
+    def _set_currency_card_active(self, active: bool) -> None:
+        self._show_currency_card = active
+        self.currency_card.display = active
+        self.overview_value.display = not active
+        self.overview_daemon_status.display = not active
+        if self._currency_card_auto_hide_timer:
+            self._currency_card_auto_hide_timer.stop()
+            self._currency_card_auto_hide_timer = None
+        if active:
+            self._currency_card_auto_hide_timer = self.set_timer(60.0, self._auto_deactivate_currency_card)
+
+    def _auto_deactivate_currency_card(self) -> None:
+        self._currency_card_auto_hide_timer = None
+        if not self._show_currency_card:
+            return
+        self._set_currency_card_active(False)
 
     def action_toggle_map_center(self) -> None:
         """Toggle map view between default (Americas west) and centered on node (m key)."""
@@ -2471,7 +2500,6 @@ class LynxTuiApp(App):
             supported = {code for _, code in SUPPORTED_CURRENCIES}
             if currency in supported:
                 self._currency = currency
-                self.currency_status.update(f"Display currency: {currency}")
                 self.refresh_currency_list()
                 await self.refresh_data()
             return
