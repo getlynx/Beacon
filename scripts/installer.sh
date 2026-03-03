@@ -66,6 +66,7 @@ LYNX_REPO="getlynx/Lynx"
  install_launcher() {
   cat <<'EOF' > /usr/local/bin/beacon
 #!/bin/bash
+unset BEACON_NO_SPLASH
 exec /usr/local/beacon/venv/bin/python -m beacon
 EOF
    chmod +x /usr/local/bin/beacon
