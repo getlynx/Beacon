@@ -70,6 +70,9 @@ unset BEACON_NO_SPLASH
 exec /usr/local/beacon/venv/bin/python -m beacon
 EOF
    chmod +x /usr/local/bin/beacon
+   # Case-insensitive entry points (Beacon, BEACON)
+   ln -sf /usr/local/bin/beacon /usr/local/bin/Beacon
+   ln -sf /usr/local/bin/beacon /usr/local/bin/BEACON
  }
 
 update_login_bashrc() {
