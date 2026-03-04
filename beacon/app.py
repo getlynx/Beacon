@@ -4498,10 +4498,13 @@ class Beacon(App):
             self._update_available = None
             self._sync_update_binding()
             self.notify(
-                "Update installed! Press 'q' to quit, then run 'beacon' to restart.",
+                "Update installed! Restarting Beacon...",
                 severity="information",
-                timeout=10,
+                timeout=3,
             )
+            # Signal __main__ to exec into updated app after this process exits.
+            os.environ["BEACON_RESTART_AFTER_EXIT"] = "1"
+            self.exit()
         else:
             self.notify(f"Update failed: {err}", severity="error", timeout=8)
 

@@ -40,8 +40,8 @@ The TUI starts automatically on interactive SSH login (not on SFTP/SCP sessions)
 
 Beacon checks for new releases on GitHub once per hour. When a newer version is
 available, the header shows a notice and the `u` key appears in the footer.
-Press `u` to download and install the update in-place. After the update completes,
-press `q` to quit and run `beacon` to restart with the new version.
+Press `u` to download and install the update in-place. Beacon then restarts
+automatically with the new version.
 
 The current Beacon version is shown in the Daemon Status card.
 

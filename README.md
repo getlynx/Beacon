@@ -50,8 +50,8 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 
 Beacon checks for new releases on GitHub once per hour. When a newer version is
 found, the header displays an update notice and the `u` key appears in the footer.
-Press `u` to download and install the update, then `q` to quit and run `beacon`
-to restart with the new version.
+Press `u` to download and install the update; Beacon then restarts automatically
+with the new version.
 
 ## Development
 

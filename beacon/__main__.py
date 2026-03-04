@@ -9,15 +9,16 @@ SPLASH_TEXT = (
     "In an era where digital information faces constant threats of loss, "
     "manipulation, or obsolescence, Lynx Data Storage technology offers a "
     "groundbreaking solution for permanent data storage.\n\n"
+    "Running Beacon helps advance this mission. Thank you for being part of it.\n\n"
     "Read more at https://docs.getlynx.io/"
 )
 SPLASH_LOGO = [
-    "██╗   ██╗   ██╗███╗   ██╗██╗  ██╗",
-    "██║   ╚██╗ ██╔╝████╗  ██║╚██╗██╔╝",
-    "██║    ╚████╔╝ ██╔██╗ ██║ ╚███╔╝ ",
-    "██║     ╚██╔╝  ██║╚██╗██║ ██╔██╗ ",
-    "███████╗ ██║   ██║ ╚████║██╔╝ ██╗",
-    "╚══════╝ ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝",
+    "██╗  ██╗   ██╗███╗   ██╗██╗  ██╗",
+    "██║  ╚██╗ ██╔╝████╗  ██║╚██╗██╔╝",
+    "██║   ╚████╔╝ ██╔██╗ ██║ ╚███╔╝ ",
+    "██║    ╚██╔╝  ██║╚██╗██║ ██╔██╗ ",
+    "███████╗██║   ██║ ╚████║██╔╝ ██╗",
+    "╚══════╝╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝",
 ]
 
 
@@ -185,6 +186,16 @@ def _import_and_run_app(trace_enabled: bool, trace_path: str | None) -> None:
     run()
 
 
+def _maybe_restart_after_update() -> None:
+    """If update just completed, replace this process with the updated Beacon."""
+    if os.environ.pop("BEACON_RESTART_AFTER_EXIT", None) != "1":
+        return
+    venv_python = "/usr/local/beacon/venv/bin/python"
+    if not os.path.isfile(venv_python):
+        return
+    os.execv(venv_python, [venv_python, "-m", "beacon"])
+
+
 if __name__ == "__main__":
     trace_enabled = os.environ.get("BEACON_TRACE_STARTUP") == "1"
     _restore_trace, _trace_path = _enable_startup_trace()
@@ -192,6 +203,7 @@ if __name__ == "__main__":
         _show_startup_splash()
         _apply_terminal_compatibility_patches()
         _import_and_run_app(trace_enabled=trace_enabled, trace_path=_trace_path)
+        _maybe_restart_after_update()
     except ModuleNotFoundError as e:
         if "textual" in str(e) or "pyproj" in str(e):
             print("Missing dependency. Run from project root: python3 run", file=sys.stderr)
