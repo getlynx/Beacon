@@ -160,14 +160,15 @@ class GeoCache:
             self._save_cache()
         return result
 
-    def get_my_location(self) -> tuple[float, float] | None:
+    def get_my_location(self, force_refresh: bool = False) -> tuple[float, float] | None:
         """
         Get the node's location (requestor's public IP geo). Cached for MY_LOCATION_TTL.
-        Returns (lat, lon) or None if lookup fails.
+        Returns (lat, lon) or None if lookup fails. Also caches the node's public IP.
+        If force_refresh is True, skip cache and re-fetch (e.g. to populate missing "ip").
         """
         now = int(time.time())
         cached = self._cache.get(MY_LOCATION_KEY)
-        if cached and (now - cached.get("ts", 0)) < MY_LOCATION_TTL:
+        if not force_refresh and cached and (now - cached.get("ts", 0)) < MY_LOCATION_TTL:
             return (cached["lat"], cached["lon"])
         try:
             r = requests.get(
@@ -183,6 +184,7 @@ class GeoCache:
                     "lat": float(lat),
                     "lon": float(lon),
                     "country": str(data.get("country_code", ""))[:2],
+                    "ip": str(data.get("ip", "")).strip(),
                     "ts": now,
                 }
                 self._cache[MY_LOCATION_KEY] = result
@@ -191,3 +193,60 @@ class GeoCache:
         except Exception:
             pass
         return None
+
+    def get_my_ip(self) -> str | None:
+        """
+        Return the node's self-reported public IP (from geo cache). Returns None if unknown.
+        Prefers IPv4 when both are available. Kept for backward compatibility.
+        """
+        ipv4, ipv6 = self.get_my_ipv4_ipv6()
+        return ipv4 or ipv6
+
+    def get_my_ipv4_ipv6(self) -> tuple[str | None, str | None]:
+        """
+        Return the node's self-reported public IPv4 and IPv6.
+        Returns (ipv4, ipv6); either can be None if unavailable or fetch failed.
+        Results are cached for MY_LOCATION_TTL. Fetches from icanhazip when cache is cold.
+        """
+        now = int(time.time())
+        cached = self._cache.get(MY_LOCATION_KEY)
+        if cached and (now - cached.get("ts", 0)) < MY_LOCATION_TTL:
+            ipv4 = cached.get("ipv4") or None
+            ipv6 = cached.get("ipv6") or None
+            if ipv4 is not None or ipv6 is not None:
+                return (ipv4, ipv6)
+        # Fetch both; use dedicated endpoints so we get v4 and v6 explicitly
+        ipv4 = self._fetch_my_ipv4()
+        ipv6 = self._fetch_my_ipv6()
+        if cached is None:
+            cached = {}
+        cached = dict(cached)
+        cached["ts"] = now
+        if ipv4:
+            cached["ipv4"] = ipv4
+        if ipv6:
+            cached["ipv6"] = ipv6
+        cached["ip"] = ipv4 or ipv6 or cached.get("ip", "")
+        self._cache[MY_LOCATION_KEY] = cached
+        self._save_cache()
+        return (ipv4, ipv6)
+
+    def _fetch_my_ipv4(self) -> str | None:
+        """Fetch node's public IPv4 (plain text)."""
+        try:
+            r = requests.get("https://ipv4.icanhazip.com", timeout=4)
+            r.raise_for_status()
+            ip = r.text.strip()
+            return ip if ip and not _is_private_or_local(ip) else None
+        except Exception:
+            return None
+
+    def _fetch_my_ipv6(self) -> str | None:
+        """Fetch node's public IPv6 (plain text)."""
+        try:
+            r = requests.get("https://ipv6.icanhazip.com", timeout=4)
+            r.raise_for_status()
+            ip = r.text.strip()
+            return ip if ip and not _is_private_or_local(ip) else None
+        except Exception:
+            return None

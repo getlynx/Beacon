@@ -248,8 +248,10 @@ class CustomHeader(Static):
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
+        node_ip = ""
         if hasattr(self.app, 'status_bar') and self.app.status_bar:
             node_status = self.app.status_bar.node_status
+            node_ip = getattr(self.app.status_bar, 'node_ip', "") or ""
         if node_status == "running":
             status_emoji = E("🟢", "*")
             display = "Online"
@@ -259,12 +261,11 @@ class CustomHeader(Static):
         else:
             status_emoji = E("🔴", "x")
             display = "Daemon starting or offline"
-        node_status_str = f"{status_emoji} Node Status: {display} "
+        node_status_str = f"{status_emoji} Beacon Status: {display}"
+        if node_ip:
+            node_status_str += f" {node_ip}"
+        node_status_str += " "
 
-        update_str = ""
-        if hasattr(self.app, '_update_available') and self.app._update_available:
-            update_str = f"{E('⬆', '^')} v{self.app._update_available} available (u) "
-        
         indicator_emoji = {
             "green": E("🟢", "*"),
             "yellow": E("🟡", "~"),
@@ -277,8 +278,8 @@ class CustomHeader(Static):
             time_with_indicator = f"{time_str} {indicator_emoji}"
             time_len = len(time_with_indicator)
             
-            if len(node_status_str) + len(update_str) + time_len > width:
-                max_left = max(0, width - time_len - len(update_str) - 2)
+            if len(node_status_str) + time_len > width:
+                max_left = max(0, width - time_len - 2)
                 node_status_str = node_status_str[:max_left] if max_left > 0 else ""
             
             line = [' '] * width
@@ -295,12 +296,6 @@ class CustomHeader(Static):
                     line[cursor] = char
                     cursor += 1
 
-            if update_str:
-                for char in update_str:
-                    if cursor < time_start:
-                        line[cursor] = char
-                        cursor += 1
-
             title_start = max(cursor, (width - len(title)) // 2)
             for i, char in enumerate(title):
                 pos = title_start + i
@@ -309,13 +304,14 @@ class CustomHeader(Static):
             
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{update_str}{title}  {time_str} {indicator_emoji}")
+            self.update(f"{node_status_str}{title}  {time_str} {indicator_emoji}")
 
 
 class StatusBar(Static):
     def __init__(self) -> None:
         super().__init__()
         self.node_status = "unknown"
+        self.node_ip = ""
         self.block_height = "-"
         self.staking = "unknown"
         self.theme_name = "beacon-high-contrast-dark"
@@ -3650,6 +3646,10 @@ class Beacon(App):
             None, self.rpc.get_daemon_status
         )
         self.status_bar.node_status = status
+        ipv4, ipv6 = await asyncio.get_event_loop().run_in_executor(
+            None, self.geo_cache.get_my_ipv4_ipv6
+        )
+        self.status_bar.node_ip = " ".join(f"({x})" for x in (ipv4, ipv6) if x) or ""
         self.status_bar.refresh()
         self.header.update_clock()
 
@@ -4230,6 +4230,8 @@ class Beacon(App):
 
         def update_status() -> None:
             self.status_bar.node_status = data["daemon_status"]
+            ipv4, ipv6 = self.geo_cache.get_my_ipv4_ipv6()
+            self.status_bar.node_ip = " ".join(f"({x})" for x in (ipv4, ipv6) if x) or ""
             self.status_bar.block_height = block_height_cli
             # New block notification
             block_height = blockchain_info.get("blocks") if isinstance(blockchain_info, dict) else None
@@ -4557,15 +4559,23 @@ class Beacon(App):
             return None
 
     def _sync_update_binding(self) -> None:
-        """Show or hide the 'u' key in the footer based on update availability."""
+        """Show or hide the 'u' key in the footer based on update availability; show verbose label when available."""
         has_binding = "u" in self._bindings.key_to_bindings
         if self._map_fullscreen_active:
             if has_binding:
                 self._bindings.key_to_bindings.pop("u", None)
             self.refresh_bindings()
             return
-        if self._update_available and not has_binding:
-            self.bind("u", "apply_update", description=f"Update {E('⬆', '^')}")
+        if self._update_available:
+            verbose = f"{E('⬆', '^')} v{self._update_available} available"
+            if has_binding:
+                bindings_list = self._bindings.key_to_bindings.get("u")
+                if bindings_list:
+                    self._bindings.key_to_bindings["u"] = [
+                        dataclass_replace(b, description=verbose) for b in bindings_list
+                    ]
+            else:
+                self.bind("u", "apply_update", description=verbose)
         elif not self._update_available and has_binding:
             self._bindings.key_to_bindings.pop("u", None)
         self.refresh_bindings()
