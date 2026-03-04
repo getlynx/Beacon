@@ -58,11 +58,15 @@ class GeoCache:
 
     def _fetch_from_api(self, ip: str) -> dict[str, Any] | None:
         """
-        Fetch lat/lon from geo APIs. Returns {lat, lon, country} or None.
+        Fetch lat/lon and optional city/region from geo APIs.
+        Returns {lat, lon, country, city?, region?, ts} or None.
         Tries GeoJS, ip-api.com, then ipapi.co. Only successful results are cached;
         failed lookups are retried on the next refresh.
         """
-        # GeoJS (primary)
+        def _norm(s: Any) -> str:
+            return str(s).strip() if s else ""
+
+        # GeoJS (primary) - returns city, region
         try:
             r = requests.get(
                 f"https://get.geojs.io/v1/ip/geo/{ip}.json",
@@ -78,15 +82,17 @@ class GeoCache:
                     "lat": float(lat),
                     "lon": float(lon),
                     "country": str(country)[:2] if country else "",
+                    "city": _norm(data.get("city")),
+                    "region": _norm(data.get("region")),
                     "ts": int(time.time()),
                 }
         except Exception:
             pass
 
-        # ip-api.com (fallback, 45 req/min)
+        # ip-api.com (fallback, 45 req/min) - regionName
         try:
             r = requests.get(
-                f"http://ip-api.com/json/{ip}?fields=lat,lon,countryCode",
+                f"http://ip-api.com/json/{ip}?fields=lat,lon,countryCode,city,regionName",
                 timeout=5,
             )
             r.raise_for_status()
@@ -99,12 +105,14 @@ class GeoCache:
                     "lat": float(lat),
                     "lon": float(lon),
                     "country": str(country)[:2] if country else "",
+                    "city": _norm(data.get("city")),
+                    "region": _norm(data.get("regionName")),
                     "ts": int(time.time()),
                 }
         except Exception:
             pass
 
-        # ipapi.co (third fallback, free tier)
+        # ipapi.co (third fallback, free tier) - city, region
         try:
             r = requests.get(
                 f"https://ipapi.co/{ip}/json/",
@@ -120,6 +128,8 @@ class GeoCache:
                     "lat": float(lat),
                     "lon": float(lon),
                     "country": str(country)[:2] if country else "",
+                    "city": _norm(data.get("city")),
+                    "region": _norm(data.get("region")),
                     "ts": int(time.time()),
                 }
         except Exception:
@@ -127,11 +137,12 @@ class GeoCache:
 
         return None
 
-    def lookup(self, ip: str) -> dict[str, Any] | None:
+    def lookup(self, ip: str, *, force_refresh: bool = False) -> dict[str, Any] | None:
         """
-        Look up IP geolocation. Returns {lat, lon, country} or None.
-        Skips private IPs. Uses cache; fetches from API on miss.
-        Only successful lookups are cached; failed lookups are retried on next refresh.
+        Look up IP geolocation. Returns {lat, lon, country, city?, region?, ts} or None.
+        city and region may be missing on older cache entries. Skips private IPs.
+        Uses cache; fetches from API on miss. If force_refresh is True, skips cache
+        and fetches from API (e.g. to get city/region for older cache entries).
         """
         ip_clean = ip.strip()
         if not ip_clean:
@@ -140,7 +151,7 @@ class GeoCache:
         if _is_private_or_local(ip_clean):
             return None
 
-        if ip_clean in self._cache:
+        if not force_refresh and ip_clean in self._cache:
             return self._cache[ip_clean]
 
         result = self._fetch_from_api(ip_clean)

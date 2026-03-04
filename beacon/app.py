@@ -829,6 +829,13 @@ class StakingPanel(VerticalScroll):
 
 
 class PeerListPanel(VerticalScroll):
+    """Peers card: variable-width first column (IP/location), fixed-width right columns."""
+
+    # Tighter widths so only the 2-char COLUMN_GAP shows between values (like Network Activity)
+    SUBVER_WIDTH = 12   # e.g. Lynx:26.4.40
+    SYNCED_WIDTH = 7   # block height fixed at 7 chars
+    PING_WIDTH = 13    # e.g. ping: 0.001s + 1 char so it doesn't touch scrollbar
+
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.title = title
@@ -840,7 +847,7 @@ class PeerListPanel(VerticalScroll):
         self.add_class("card")
         self.add_class(accent_class)
         self._content = Static("... loading", classes="network-row-text")
-        self._lines: list[tuple[str, int | None]] = []
+        self._lines: list[tuple[str, int | None] | tuple[str, str, str, str, int | None]] = []
         self._blink_indices: set[int] = set()
         self._blink_visible = True
         self._blink_count = 0
@@ -851,7 +858,9 @@ class PeerListPanel(VerticalScroll):
 
     def update_lines(
         self,
-        lines: list[str] | list[tuple[str, int | None]],
+        lines: list[str]
+        | list[tuple[str, int | None]]
+        | list[tuple[str, str, str, str, int | None]],
         peer_count: int | None = None,
         blink_indices: set[int] | None = None,
     ) -> None:
@@ -862,10 +871,15 @@ class PeerListPanel(VerticalScroll):
         if not lines:
             self._content.update("... loading")
             return
-        self._lines = [
-            (item[0], item[1]) if isinstance(item, tuple) else (item, None)
-            for item in lines
-        ]
+        normalized: list[tuple[str, int | None] | tuple[str, str, str, str, int | None]] = []
+        for item in lines:
+            if isinstance(item, tuple) and len(item) == 5:
+                normalized.append(item)
+            elif isinstance(item, tuple) and len(item) == 2:
+                normalized.append((item[0], item[1]))
+            else:
+                normalized.append((item if isinstance(item, str) else "", None))
+        self._lines = normalized
         if blink_indices:
             self._blink_indices = blink_indices
             self._blink_visible = True
@@ -888,9 +902,37 @@ class PeerListPanel(VerticalScroll):
             self._blink_indices = set()
             self._blink_visible = True
 
+    @staticmethod
+    def _fit_column(value: str, width: int) -> str:
+        if len(value) <= width:
+            return value.ljust(width)
+        if width <= 1:
+            return value[:width]
+        return f"{value[: width - 1]}…"
+
+    COLUMN_GAP = "  "  # 2 chars between version, block height, and ping (card standard)
+
     def _render_lines(self) -> None:
+        line_width = max(20, self.size.width - 4)
+        gap_total = len(self.COLUMN_GAP) * 2  # between subver–synced and synced–ping
+        fixed_total = self.SUBVER_WIDTH + self.SYNCED_WIDTH + self.PING_WIDTH + gap_total
+        first_col_width = max(1, line_width - fixed_total)
+
         texts: list[Text] = []
-        for i, (line, color_idx) in enumerate(self._lines):
+        for i, item in enumerate(self._lines):
+            if len(item) == 5:
+                col1, col2, col3, col4, color_idx = item
+                line = (
+                    self._fit_column(col1, first_col_width)
+                    + self._fit_column(col2, self.SUBVER_WIDTH)
+                    + self.COLUMN_GAP
+                    + self._fit_column(col3, self.SYNCED_WIDTH)
+                    + self.COLUMN_GAP
+                    + self._fit_column(col4, self.PING_WIDTH)
+                )
+            else:
+                line, color_idx = item[0], item[1]
+
             base_style = "dim" if i % 2 == 1 else ""
             if color_idx is not None and 0 <= color_idx < len(PEER_COLORS):
                 if self._blink_indices and i in self._blink_indices and not self._blink_visible:
@@ -904,6 +946,10 @@ class PeerListPanel(VerticalScroll):
             else:
                 texts.append(Text("  " + line, style=base_style))
         self._content.update(Group(*texts))
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self._lines:
+            self._render_lines()
 
 
 MISSION_TEXT = (
@@ -1625,7 +1671,7 @@ THEME_ORDER = [
 
 
 class Beacon(App):
-    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e", "o")
+    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e", "o", "y")
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("o", "restart_daemon", "Restart"),
@@ -1639,6 +1685,7 @@ class Beacon(App):
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
         ("l", "toggle_debug_log_card", "Debug Log"),
+        ("y", "toggle_peer_location", "Location"),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
 
@@ -2215,6 +2262,8 @@ class Beacon(App):
         self.debug_log_card = DebugLogCard(id="debug-log-card")
         self._show_debug_log_card = False
         self._map_log_default_set = False
+        self._show_peer_location = True  # default: city/state/country; y toggles to IP
+        self._peer_location_revert_timer: object = None
         self._debug_log_revert_timer: object = None
         self._debug_log_revert_at: float | None = None
         self.geo_cache = GeoCache()
@@ -2699,6 +2748,26 @@ class Beacon(App):
         """Toggle Overview Peers/Timezone cards (bound to z key)."""
         self._set_timezone_card_active(not self._show_timezone_card)
 
+    def action_toggle_peer_location(self) -> None:
+        """Toggle Peers card first column between IP and city/state (bound to y key). Default is city/state; 5min revert from IP view."""
+        if self._peer_location_revert_timer:
+            self._peer_location_revert_timer.stop()
+            self._peer_location_revert_timer = None
+        self._show_peer_location = not self._show_peer_location
+        if not self._show_peer_location:
+            # Switched to IP view; revert to city/state after 5 minutes
+            self._peer_location_revert_timer = self.set_timer(
+                self.PEER_LOCATION_REVERT_SECONDS, self._revert_peer_location_to_city_state
+            )
+        self.run_worker(self.refresh_data())
+
+    def _revert_peer_location_to_city_state(self) -> None:
+        """Restore Peers card to city/state view after 5 minutes in IP view."""
+        self._peer_location_revert_timer = None
+        if not self._show_peer_location:
+            self._show_peer_location = True
+            self.run_worker(self.refresh_data())
+
     def _set_timezone_card_active(self, active: bool) -> None:
         self._show_timezone_card = active
         self.timezone_card.display = active
@@ -2740,6 +2809,7 @@ class Beacon(App):
         self._set_currency_card_active(False)
 
     DEBUG_LOG_REVERT_SECONDS = 300  # 5 minutes: always revert to Peer Map
+    PEER_LOCATION_REVERT_SECONDS = 300  # 5 minutes: revert from IP view to city/state
 
     def _revert_debug_log_to_peer_map(self) -> None:
         """Called by timer: switch from Debug Log back to Peer Map after 5 minutes."""
@@ -3693,18 +3763,8 @@ class Beacon(App):
         wallet_mine = wallet_mine if isinstance(wallet_mine, dict) else {}
 
         network_entries, latest_block_time, tz_name = self.logs.get_update_tip_entries(50)
-        def fit_column(value: str, width: int) -> str:
-            if len(value) <= width:
-                return value.ljust(width)
-            if width <= 1:
-                return value[:width]
-            return f"{value[: width - 1]}…"
 
-        peer_rows: list[tuple[int, str, dict]] = []
-        addr_width = 22
-        subver_width = 16
-        synced_width = 11
-        ping_width = 12
+        peer_rows: list[tuple[int, str, str, str, str, dict]] = []
         for peer in peer_info:
             if not isinstance(peer, dict):
                 continue
@@ -3724,12 +3784,7 @@ class Beacon(App):
             ping_display = "-"
             if isinstance(ping, (int, float)):
                 ping_display = f"{ping:.3f}s"
-            addr_col = fit_column(addr, addr_width)
-            subver_col = fit_column(subver, subver_width)
-            synced_col = fit_column(synced, synced_width)
-            ping_col = fit_column(f"ping: {ping_display}", ping_width)
-            line = f"{addr_col}{subver_col}{synced_col}{ping_col}"
-            peer_rows.append((synced_value, line, peer))
+            peer_rows.append((synced_value, addr, subver, synced, ping_display, peer))
         peer_rows.sort(key=lambda row: row[0], reverse=True)
 
         def _host_from_peer(peer: dict) -> str:
@@ -3739,7 +3794,7 @@ class Beacon(App):
                 return host.replace("[", "").replace("]", "")
             return addr
 
-        current_addresses = {_host_from_peer(p) for _, _, p in peer_rows if _host_from_peer(p)}
+        current_addresses = {_host_from_peer(p) for _, _, _, _, _, p in peer_rows if _host_from_peer(p)}
         new_addresses = (
             current_addresses - self._prev_peer_addresses
             if self._prev_peer_addresses
@@ -3748,16 +3803,22 @@ class Beacon(App):
         self._prev_peer_addresses = current_addresses
 
         def _fetch_peer_locations_and_colors() -> tuple[
-            list[tuple[float, float]], list[int | None], float | None, set[int], set[int]
+            list[tuple[float, float]], list[int | None], float | None, set[int], set[int], list[str]
         ]:
             locs: list[tuple[float, float]] = []
             color_indices: list[int | None] = []
             blink_list_indices: set[int] = set()
             blink_marker_indices: set[int] = set()
-            for i, (_, _, peer) in enumerate(peer_rows):
+            location_strings: list[str] = []
+            for i, (_, _, _, _, _, peer) in enumerate(peer_rows):
                 host = _host_from_peer(peer)
+                loc_str = ""
                 if host:
                     geo = self.geo_cache.lookup(host)
+                    # If we have cached data but no city/region (old cache entry),
+                    # re-fetch once so location view shows city/state right away.
+                    if geo and not (geo.get("city") or geo.get("region")):
+                        geo = self.geo_cache.lookup(host, force_refresh=True)
                     if geo:
                         marker_idx = len(locs)
                         color_indices.append(marker_idx)
@@ -3765,13 +3826,25 @@ class Beacon(App):
                         if host in new_addresses:
                             blink_list_indices.add(i)
                             blink_marker_indices.add(marker_idx)
+                        city = (geo.get("city") or "").strip()
+                        region = (geo.get("region") or "").strip()
+                        country = (geo.get("country") or "").strip()[:3]
+                        if city and region:
+                            loc_str = f"{city}, {region}"
+                        elif city:
+                            loc_str = city
+                        elif region:
+                            loc_str = region
+                        if loc_str and country:
+                            loc_str = f"{loc_str}, {country}"
                     else:
                         color_indices.append(None)
                 else:
                     color_indices.append(None)
+                location_strings.append(loc_str)
             my_loc = self.geo_cache.get_my_location()
             center_lon = my_loc[1] if my_loc else None
-            return locs, color_indices, center_lon, blink_list_indices, blink_marker_indices
+            return locs, color_indices, center_lon, blink_list_indices, blink_marker_indices, location_strings
 
         (
             peer_locs,
@@ -3779,20 +3852,30 @@ class Beacon(App):
             center_lon,
             blink_list_indices,
             blink_marker_indices,
+            location_strings,
         ) = await asyncio.get_event_loop().run_in_executor(
             None, _fetch_peer_locations_and_colors
         )
 
-        peer_lines_with_colors: list[tuple[str, int | None]] = [
-            (line, peer_color_indices[i]) for i, (_, line, _) in enumerate(peer_rows)
-        ]
-        if not peer_lines_with_colors:
+        raw_peer_rows: list[tuple[str, str, str, str, int | None]] = []
+        for i, (_, addr, subver, synced, ping_display, _) in enumerate(peer_rows):
+            col1 = (
+                location_strings[i]
+                if (self._show_peer_location and i < len(location_strings) and location_strings[i])
+                else addr
+            )
+            raw_peer_rows.append(
+                (col1, subver, synced, f"ping:{ping_display}", peer_color_indices[i])
+            )
+        if not raw_peer_rows:
             daemon_status = data.get("daemon_status", "unknown")
-            peer_lines_with_colors = [
+            peer_lines_for_panel: list[tuple[str, int | None]] = [
                 ("Daemon starting or offline.", None)
                 if daemon_status != "running"
                 else ("No peers connected.", None)
             ]
+        else:
+            peer_lines_for_panel = raw_peer_rows
         peer_count = len(peer_info)
         
         # Get all addresses - merge data from both sources
@@ -4072,14 +4155,19 @@ class Beacon(App):
                 syncing=is_syncing,
             ),
         )
-        self._schedule_update(
-            0.2,
-            lambda: self.overview_peers.update_lines(
-                peer_lines_with_colors,
+        def _update_peers_card() -> None:
+            self.overview_peers.border_subtitle = (
+                "Showing city/state (press y for IP)"
+                if self._show_peer_location
+                else "Peers checked every ~2 minutes (press y for location)"
+            )
+            self.overview_peers.update_lines(
+                peer_lines_for_panel,
                 peer_count=peer_count,
                 blink_indices=blink_list_indices,
-            ),
-        )
+            )
+
+        self._schedule_update(0.2, _update_peers_card)
         self._last_node_center_lon = center_lon
         effective_center = center_lon if self._map_center_on_node else None
         self._schedule_update(

@@ -45,6 +45,7 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 | `w` | Open sweep card |
 | `m` | Toggle full screen map (auto-off after 60s) |
 | `l` | Toggle Debug Log / Peer Map card in overview |
+| `y` | Toggle Peers card: show IP or city/state (location) |
 | `M` | Toggle map offset (available only in fullscreen map mode) |
 | `u` | Apply update (only visible when an update is available) |
 
