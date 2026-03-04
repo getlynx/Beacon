@@ -425,6 +425,98 @@ class StorageCapabilityPanel(VerticalScroll):
         self._content.update(Group(*texts))
 
 
+class DebugLogCard(VerticalScroll):
+    """Card showing last 50 lines of daemon debug.log; streams when visible."""
+
+    DEBUG_LOG_LINES = 50
+    DEBUG_LOG_HIDE_SUBSTRINGS = (
+        "ThreadRPCServer incorrect password attempt",
+        "Block Statistics - last hour",
+    )
+    _ISO_UTC_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = f"{E('📜', '>')} Debug Log"
+        self.border_title_align = ("left", "top")
+        self.border_subtitle = ""
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class("network")
+        self._content = Static("... loading", classes="network-row-text")
+        self._refresh_timer: object = None
+        self._scroll_to_bottom_on_next_refresh = False
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def on_mount(self) -> None:
+        self._start_refresh_timer()
+
+    def on_unmount(self) -> None:
+        self._stop_refresh_timer()
+
+    def _start_refresh_timer(self) -> None:
+        self._stop_refresh_timer()
+        self._refresh_timer = self.set_interval(1.5, self._refresh_lines)
+
+    def _stop_refresh_timer(self) -> None:
+        if self._refresh_timer:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
+
+    def _convert_utc_timestamps_in_line(self, line: str, tz: ZoneInfo) -> str:
+        """Replace ISO UTC timestamps (e.g. 2026-03-04T06:23:24Z) in line with local time."""
+        def repl(m: re.Match[str]) -> str:
+            try:
+                s = m.group(0).replace("Z", "+00:00")
+                utc_dt = datetime.fromisoformat(s)
+                local_dt = utc_dt.astimezone(tz)
+                return local_dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return m.group(0)
+        return self._ISO_UTC_PATTERN.sub(repl, line)
+
+    def _refresh_lines(self) -> None:
+        if not self.display:
+            return
+        # Only auto-scroll to bottom if user hasn't scrolled up (so they can read history)
+        at_bottom = self.is_vertical_scroll_end
+        try:
+            tz_name = getattr(self.app, "system", None)
+            tz_name = (tz_name.get_timezone() if tz_name and hasattr(tz_name, "get_timezone") else None) or "UTC"
+            if tz_name == "unknown":
+                tz_name = "UTC"
+            try:
+                tz = ZoneInfo(tz_name)
+            except Exception:
+                tz = ZoneInfo("UTC")
+        except Exception:
+            tz = ZoneInfo("UTC")
+        try:
+            tailer = self.app.logs
+            lines = tailer.tail_lines()
+            lines = [
+                ln for ln in lines
+                if not any(h in ln for h in self.DEBUG_LOG_HIDE_SUBSTRINGS)
+            ]
+            lines = lines[-self.DEBUG_LOG_LINES:] if len(lines) > self.DEBUG_LOG_LINES else lines
+            lines = [self._convert_utc_timestamps_in_line(ln, tz) for ln in lines]
+        except Exception:
+            lines = ["Unable to read debug.log"]
+        if not lines:
+            self._content.update("(no log lines)")
+            return
+        texts = [
+            Text(ln, style="dim" if i % 2 == 1 else "")
+            for i, ln in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
+        if self._scroll_to_bottom_on_next_refresh or at_bottom:
+            self._scroll_to_bottom_on_next_refresh = False
+            self.call_later(self.scroll_end)
+
+
 class PeerMapCard(Static):
     """World map card with peer location markers. Uses Shapely + Natural Earth for dynamic map."""
 
@@ -893,7 +985,10 @@ class AddressListPanel(VerticalScroll):
         self._loaded = True
         if address_count is not None:
             if address_count == 0:
-                self.border_title = f"{E('💼', '>')} Addresses (press c to create your first address)"
+                if daemon_status != "running":
+                    self.border_title = f"{E('💼', '>')} Addresses (...loading)"
+                else:
+                    self.border_title = f"{E('💼', '>')} Addresses (press c to create your first address)"
             else:
                 self.border_title = f"{E('💼', '>')} Addresses ({address_count})"
         else:
@@ -1530,9 +1625,10 @@ THEME_ORDER = [
 
 
 class Beacon(App):
-    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e")
+    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e", "o")
     BINDINGS = [
         ("q", "quit", "Quit"),
+        ("o", "restart_daemon", "Restart"),
         ("r", "refresh_all", "Refresh"),
         ("s", "toggle_staking", "Staking"),
         ("t", "cycle_theme", "Theme"),
@@ -1542,6 +1638,7 @@ class Beacon(App):
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
+        ("l", "toggle_debug_log_card", "Debug Log"),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
 
@@ -1613,22 +1710,34 @@ class Beacon(App):
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
     }
-    #map-peer-map {
+    #map-log-slot {
         column-span: 4;
         row-span: 3;
         width: 1fr;
         height: 1fr;
         min-width: 52;
         min-height: 22;
+    }
+    #map-peer-map {
+        width: 100%;
+        height: 100%;
+        min-width: 52;
+        min-height: 22;
         text-wrap: nowrap;
     }
     #map-peer-map.map-fullscreen {
-        column-span: 6;
-        row-span: 5;
         width: 1fr;
         height: 1fr;
         min-width: 0;
         min-height: 0;
+    }
+    #debug-log-card {
+        width: 100%;
+        height: 100%;
+        min-height: 6;
+        overflow-y: scroll;
+        scrollbar-visibility: visible;
+        scrollbar-gutter: stable;
     }
     #overview-pricing,
     #overview-value {
@@ -2065,6 +2174,7 @@ class Beacon(App):
         self._schrodinger_block_notified: set[int] = set()
         self._update_available: str | None = None
         self._update_in_progress = False
+        self._daemon_status: str = "unknown"
         try:
             _osrel = platform.freedesktop_os_release()
             _pretty = _osrel.get("PRETTY_NAME") or _osrel.get("NAME") or "Unknown"
@@ -2101,6 +2211,12 @@ class Beacon(App):
             f"{E('💾', '>')} Storage Capability", "node", id="overview-storage"
         )
         self.peer_map = PeerMapCard(id="map-peer-map")
+        self.map_log_slot = Container(id="map-log-slot")
+        self.debug_log_card = DebugLogCard(id="debug-log-card")
+        self._show_debug_log_card = False
+        self._map_log_default_set = False
+        self._debug_log_revert_timer: object = None
+        self._debug_log_revert_at: float | None = None
         self.geo_cache = GeoCache()
 
         self.block_stats_card = BlockStatsPanel(
@@ -2340,7 +2456,9 @@ class Beacon(App):
                             yield self.overview_pricing
                             yield self.overview_value
                             yield self.currency_card
-                            yield self.peer_map
+                            with self.map_log_slot:
+                                yield self.peer_map
+                                yield self.debug_log_card
                             yield self.overview_system
                             yield self.overview_daemon_status
                             yield self.overview_mempool
@@ -2410,6 +2528,10 @@ class Beacon(App):
         self.bind("ctrl+shift+w", "set_theme_warm_terminal", description="Warm Terminal", show=False)
         self.bind("ctrl+shift+b", "set_theme_beacon_midnight", description="Beacon Midnight", show=False)
         self._sync_map_offset_binding()
+        self._sync_restart_daemon_binding()
+        self._sync_create_address_binding()
+        self._set_debug_log_card_visible(self._show_debug_log_card)
+        self.set_interval(1.0, self._update_debug_log_countdown)
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -2617,6 +2739,87 @@ class Beacon(App):
             return
         self._set_currency_card_active(False)
 
+    DEBUG_LOG_REVERT_SECONDS = 300  # 5 minutes: always revert to Peer Map
+
+    def _revert_debug_log_to_peer_map(self) -> None:
+        """Called by timer: switch from Debug Log back to Peer Map after 5 minutes."""
+        self._debug_log_revert_timer = None
+        self._debug_log_revert_at = None
+        if not self._show_debug_log_card:
+            return
+        self._set_debug_log_card_visible(False)
+        if self._map_fullscreen_active:
+            self._set_fullscreen_map_active(False)
+        self._sync_debug_log_binding()
+
+    def _update_debug_log_countdown(self) -> None:
+        """Update Debug Log card subtitle with countdown to revert (runs every 1s)."""
+        if not self._show_debug_log_card or self._debug_log_revert_at is None:
+            self.debug_log_card.border_subtitle = ""
+            return
+        remaining = max(0.0, self._debug_log_revert_at - time.monotonic())
+        mins = int(remaining) // 60
+        secs = int(remaining) % 60
+        self.debug_log_card.border_subtitle = f"Reverts to Peer Map in {mins}:{secs:02d}"
+
+    def _sync_debug_log_binding(self) -> None:
+        """Ensure 'l' (Debug Log) is in the footer when not fullscreen; restore if missing."""
+        if self._map_fullscreen_active:
+            return
+        if "l" not in self._bindings.key_to_bindings:
+            self.bind("l", "toggle_debug_log_card", description="Debug Log")
+            self.refresh_bindings()
+
+    def _set_debug_log_card_visible(self, show_log: bool) -> None:
+        """Show Debug Log card or Peer Map in the map/log slot."""
+        if self._debug_log_revert_timer:
+            self._debug_log_revert_timer.stop()
+            self._debug_log_revert_timer = None
+        self._debug_log_revert_at = None
+        self._show_debug_log_card = show_log
+        self.peer_map.display = not show_log
+        self.debug_log_card.display = show_log
+        if show_log:
+            self.debug_log_card._scroll_to_bottom_on_next_refresh = True
+            self.debug_log_card._refresh_lines()
+            self._debug_log_revert_at = time.monotonic() + self.DEBUG_LOG_REVERT_SECONDS
+            self._debug_log_revert_timer = self.set_timer(
+                self.DEBUG_LOG_REVERT_SECONDS, self._revert_debug_log_to_peer_map
+            )
+
+    def action_toggle_debug_log_card(self) -> None:
+        """Toggle between Peer Map and Debug Log card (bound to l key). Works in fullscreen too."""
+        if self._map_fullscreen_active:
+            if self._show_debug_log_card:
+                # Fullscreen Debug Log → switch back to fullscreen Peer Map (60s timer)
+                self._show_debug_log_card = False
+                self.peer_map.display = True
+                self.debug_log_card.display = False
+                if self._debug_log_revert_timer:
+                    self._debug_log_revert_timer.stop()
+                    self._debug_log_revert_timer = None
+                self._debug_log_revert_at = None
+                self.debug_log_card.border_subtitle = ""
+                self._map_fullscreen_timer = self.set_timer(60.0, self._auto_deactivate_fullscreen_map)
+                self.peer_map.refresh(layout=True)
+                self._render_fullscreen_map_after_layout()
+            else:
+                # Fullscreen Peer Map → switch to fullscreen Debug Log (5min timer)
+                self._show_debug_log_card = True
+                self.peer_map.display = False
+                self.debug_log_card.display = True
+                if self._map_fullscreen_timer:
+                    self._map_fullscreen_timer.stop()
+                    self._map_fullscreen_timer = None
+                self.debug_log_card._scroll_to_bottom_on_next_refresh = True
+                self.debug_log_card._refresh_lines()
+                self._debug_log_revert_at = time.monotonic() + self.DEBUG_LOG_REVERT_SECONDS
+                self._debug_log_revert_timer = self.set_timer(
+                    self.DEBUG_LOG_REVERT_SECONDS, self._revert_debug_log_to_peer_map
+                )
+            return
+        self._set_debug_log_card_visible(not self._show_debug_log_card)
+
     def action_toggle_fullscreen_map(self) -> None:
         """Toggle temporary fullscreen map view (bound to M key)."""
         self._set_fullscreen_map_active(not self._map_fullscreen_active)
@@ -2630,20 +2833,24 @@ class Beacon(App):
             widget.display = not active
         if active:
             self.overview_grid.styles.grid_rows = "1fr"
+            self.map_log_slot.styles.column_span = 6
+            self.map_log_slot.styles.row_span = 1
+            self._show_debug_log_card = False
+            self.peer_map.display = True
+            self.debug_log_card.display = False
             self.peer_map.add_class("map-fullscreen")
             self.peer_map._suppress_render = True
-            self.peer_map.styles.column_span = 6
-            self.peer_map.styles.row_span = 1
             self.peer_map.styles.min_width = 0
             self.peer_map.styles.min_height = 0
         else:
             self.overview_grid.styles.grid_rows = "22 auto 9fr 10fr 7fr"
+            self.map_log_slot.styles.column_span = 4
+            self.map_log_slot.styles.row_span = 3
             self.peer_map.remove_class("map-fullscreen")
             self.peer_map._suppress_render = True
-            self.peer_map.styles.column_span = 4
-            self.peer_map.styles.row_span = 3
             self.peer_map.styles.min_width = 52
             self.peer_map.styles.min_height = 22
+            self._set_debug_log_card_visible(self._show_debug_log_card)
         if self._map_fullscreen_timer:
             self._map_fullscreen_timer.stop()
             self._map_fullscreen_timer = None
@@ -2803,7 +3010,18 @@ class Beacon(App):
         self.notify(f"Map view: {mode}", title="Map", timeout=2)
 
     async def action_create_new_address(self) -> None:
-        """Create a new receiving address (bound to c key)."""
+        """Create a new receiving address (bound to c key). Disabled when daemon is not running."""
+        status = await asyncio.get_event_loop().run_in_executor(
+            None, self.rpc.get_daemon_status
+        )
+        if status != "running":
+            self.notify(
+                "Daemon is not ready. Wait for it to come online.",
+                title="Addresses",
+                severity="warning",
+                timeout=5,
+            )
+            return
         try:
             address = await asyncio.get_event_loop().run_in_executor(
                 None, self.rpc.getnewaddress
@@ -3873,16 +4091,21 @@ class Beacon(App):
                 blink_indices=blink_marker_indices,
             ),
         )
+        self._daemon_status = data.get("daemon_status", "unknown")
+        if not self._map_log_default_set:
+            self._map_log_default_set = True
+            self._set_debug_log_card_visible(self._daemon_status != "running")
         self._schedule_update(
             0.3,
             lambda: self.overview_addresses.update_lines(
                 addr_list,
                 address_count=address_count,
                 wallet_balance=data.get("wallet_balance"),
-                daemon_status=data.get("daemon_status", "unknown"),
+                daemon_status=self._daemon_status,
                 wallet_info=data.get("wallet_info"),
             ),
         )
+        self._sync_create_address_binding()
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
         staking_status = (
             "enabled" if self._staking_enabled is True
@@ -4259,6 +4482,33 @@ class Beacon(App):
             self._bindings.key_to_bindings.pop("u", None)
         self.refresh_bindings()
 
+    def _sync_restart_daemon_binding(self) -> None:
+        """Set the 'o' key footer label to Restart {Chain}; add binding if missing (e.g. after leaving fullscreen)."""
+        if self._map_fullscreen_active:
+            return
+        chain_id = self.rpc._get_chain_id()
+        label = f"Restart {chain_id.capitalize()}"
+        bindings_list = self._bindings.key_to_bindings.get("o")
+        if bindings_list:
+            self._bindings.key_to_bindings["o"] = [
+                dataclass_replace(b, description=label) for b in bindings_list
+            ]
+        else:
+            self.bind("o", "restart_daemon", description=label)
+        self.refresh_bindings()
+
+    def _sync_create_address_binding(self) -> None:
+        """Show or hide the 'c' (New Address) key in the footer based on daemon status."""
+        if self._map_fullscreen_active:
+            return
+        has_binding = "c" in self._bindings.key_to_bindings
+        if self._daemon_status != "running" and has_binding:
+            self._bindings.key_to_bindings.pop("c", None)
+            self.refresh_bindings()
+        elif self._daemon_status == "running" and not has_binding:
+            self.bind("c", "create_new_address", description="New Address")
+            self.refresh_bindings()
+
     def _schedule_send_sweep_reset_if_hidden(self) -> None:
         """If Send/Sweep hotkeys would be hidden and a card is visible, reset to difficulty chart in 5s."""
         send_sweep_hidden = (
@@ -4311,17 +4561,18 @@ class Beacon(App):
             "r": ("refresh_all", "Refresh"),
             "s": ("toggle_staking", "Staking"),
             "t": ("cycle_theme", "Theme"),
-            "c": ("create_new_address", "New Address"),
             "p": ("toggle_value_currency_card", "Currency"),
             "z": ("toggle_timezone_card", "Timezone"),
             "x": ("toggle_send_card", "Send"),
             "w": ("toggle_sweep_card", "Sweep"),
+            "l": ("toggle_debug_log_card", "Debug Log"),
             "e": ("toggle_wallet_lock", self._wallet_binding_label()),
         }
         for key, (action, description) in desired.items():
             if key not in self._bindings.key_to_bindings:
                 self.bind(key, action, description=description)
-        self.refresh_bindings()
+        self._sync_create_address_binding()
+        self._sync_restart_daemon_binding()
 
     def _sync_map_offset_binding(self) -> None:
         """Show map offset hotkey only during fullscreen map mode."""
@@ -4426,6 +4677,36 @@ class Beacon(App):
                 dataclass_replace(b, description=label) for b in bindings_list
             ]
         self.refresh_bindings()
+
+    async def action_restart_daemon(self) -> None:
+        """Hotkey 'o': restart the chain daemon (e.g. systemctl restart lynx). Does not restart Beacon."""
+        chain_id = self.rpc._get_chain_id()
+
+        def _do_restart() -> tuple[bool, str]:
+            try:
+                result = subprocess.run(
+                    ["systemctl", "restart", chain_id],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode == 0:
+                    return True, ""
+                return False, result.stderr.strip() or result.stdout.strip() or f"exit code {result.returncode}"
+            except Exception as exc:
+                return False, str(exc)[:200]
+
+        self.notify(f"Restarting {chain_id}...", severity="information", timeout=2)
+        success, err = await asyncio.get_event_loop().run_in_executor(None, _do_restart)
+        if success:
+            self.notify(
+                f"{chain_id.capitalize()} daemon restart requested.",
+                severity="information",
+                timeout=5,
+            )
+            self._set_debug_log_card_visible(True)
+        else:
+            self.notify(f"Restart failed: {err}", severity="error", timeout=8)
 
     async def _check_for_update(self) -> None:
         """Periodic check: compare local version against latest GitHub release."""

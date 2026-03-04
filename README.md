@@ -36,6 +36,7 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 | Key | Action |
 |-----|--------|
 | `q` | Quit |
+| `o` | Restart daemon (e.g. Restart Lynx) |
 | `r` | Refresh all data |
 | `s` | Toggle staking |
 | `t` | Cycle theme |
@@ -43,6 +44,7 @@ progress. A sync-monitor service restarts the daemon periodically until sync com
 | `x` | Open send card |
 | `w` | Open sweep card |
 | `m` | Toggle full screen map (auto-off after 60s) |
+| `l` | Toggle Debug Log / Peer Map card in overview |
 | `M` | Toggle map offset (available only in fullscreen map mode) |
 | `u` | Apply update (only visible when an update is available) |
 
