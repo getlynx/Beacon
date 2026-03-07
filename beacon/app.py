@@ -3627,6 +3627,27 @@ class Beacon(App):
         if not script.exists():
             script = Path(__file__).resolve().parent.parent / "scripts" / "electrumx-install.sh"
         if not script.exists():
+            # On-demand download so updated users get the script without re-running installer
+            self.notify("Downloading ElectrumX install script...", title="ElectrumX Install", timeout=5)
+            try:
+                import urllib.request
+                dest = Path(INSTALL_ROOT) / "electrumx-install.sh"
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                urllib.request.urlretrieve(
+                    "https://raw.githubusercontent.com/getlynx/Beacon/main/scripts/electrumx-install.sh",
+                    dest,
+                )
+                dest.chmod(0o755)
+                script = dest
+            except Exception as e:
+                self.notify(
+                    f"Install script not found and download failed: {e!s}. Run: curl -fsSL -o /usr/local/beacon/electrumx-install.sh https://raw.githubusercontent.com/getlynx/Beacon/main/scripts/electrumx-install.sh && chmod +x /usr/local/beacon/electrumx-install.sh",
+                    title="ElectrumX Install",
+                    severity="error",
+                    timeout=12,
+                )
+                return
+        if not script.exists():
             self.notify(
                 "Install script not found. Run the Beacon installer to add ElectrumX support.",
                 title="ElectrumX Install",
