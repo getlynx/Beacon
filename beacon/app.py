@@ -3623,6 +3623,8 @@ class Beacon(App):
         """Run ElectrumX install script (scripts/electrumx-install.sh or INSTALL_ROOT)."""
         script = Path(INSTALL_ROOT) / "electrumx-install.sh"
         if not script.exists():
+            script = Path(INSTALL_ROOT) / "app" / "scripts" / "electrumx-install.sh"
+        if not script.exists():
             script = Path(__file__).resolve().parent.parent / "scripts" / "electrumx-install.sh"
         if not script.exists():
             self.notify(
@@ -5168,9 +5170,23 @@ class Beacon(App):
                     text=True,
                     timeout=120,
                 )
-                shutil.rmtree(tmp, ignore_errors=True)
                 if result.returncode != 0:
+                    shutil.rmtree(tmp, ignore_errors=True)
                     return False, result.stderr[:300]
+                # Deploy ElectrumX install script so "Install ElectrumX" works after update
+                script_src = os.path.join(extracted, "scripts", "electrumx-install.sh")
+                script_dst = os.path.join(INSTALL_ROOT, "electrumx-install.sh")
+                if os.path.isfile(script_src):
+                    shutil.copy2(script_src, script_dst)
+                    os.chmod(script_dst, 0o755)
+                else:
+                    try:
+                        url = "https://raw.githubusercontent.com/getlynx/Beacon/main/scripts/electrumx-install.sh"
+                        urllib.request.urlretrieve(url, script_dst)
+                        os.chmod(script_dst, 0o755)
+                    except Exception:
+                        pass  # non-fatal; user can re-run installer
+                shutil.rmtree(tmp, ignore_errors=True)
                 return True, ""
             except Exception as exc:
                 return False, str(exc)[:300]

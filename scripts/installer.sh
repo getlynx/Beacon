@@ -63,6 +63,22 @@ LYNX_REPO="getlynx/Lynx"
    "$VENV_DIR/bin/pip" install "$APP_DIR"
  }
  
+ install_electrumx_script() {
+  local script_src="${APP_DIR}/scripts/electrumx-install.sh"
+  local script_dst="${INSTALL_ROOT}/electrumx-install.sh"
+  mkdir -p "${INSTALL_ROOT}"
+  if [ -f "$script_src" ]; then
+    cp "$script_src" "$script_dst"
+    chmod +x "$script_dst"
+  else
+    if command -v curl >/dev/null 2>&1; then
+      curl -fsSL --max-time 30 "https://raw.githubusercontent.com/getlynx/Beacon/main/scripts/electrumx-install.sh" -o "$script_dst" 2>/dev/null && chmod +x "$script_dst" || true
+    elif command -v wget >/dev/null 2>&1; then
+      wget -qO "$script_dst" "https://raw.githubusercontent.com/getlynx/Beacon/main/scripts/electrumx-install.sh" 2>/dev/null && chmod +x "$script_dst" || true
+    fi
+  fi
+ }
+
  install_launcher() {
   cat <<'EOF' > /usr/local/bin/beacon
 #!/bin/bash
@@ -430,6 +446,7 @@ EOF
   install_backup
    fetch_app
    install_app
+   install_electrumx_script
    install_launcher
   update_login_bashrc
   echo "Beacon installed. Run 'beacon' or log in as root to start the TUI."
