@@ -43,15 +43,40 @@ if ! command -v electrumx_server &>/dev/null; then
     echo "apt-get install had errors (exit $apt_ret). Trying optional packages separately..."
     apt-get install -y libleveldb-dev 2>/dev/null || true
   fi
-  if [ ! -d /root/electrumx-installer ]; then
-    git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
+  # If ~/.electrumx-installer already exists (e.g. from a previous run), use its install.sh
+  INSTALLER_HOME="${SUDO_HOME:-$HOME}"
+  [ -z "$INSTALLER_HOME" ] && INSTALLER_HOME="/root"
+  if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
+    echo "Found existing $INSTALLER_HOME/.electrumx-installer; running its install.sh ..."
+    set +e
+    "$INSTALLER_HOME/.electrumx-installer/install.sh"
+    install_ret=$?
+    set -e
+    if [ $install_ret -eq 0 ] && command -v electrumx_server &>/dev/null; then
+      echo "ElectrumX installed from existing installer."
+    fi
   fi
-  set +e
-  (cd /root/electrumx-installer && ./bootstrap.sh)
-  bootstrap_ret=$?
-  set -e
-  if [ $bootstrap_ret -ne 0 ]; then
-    echo "ElectrumX bootstrap failed (exit $bootstrap_ret). Check errors above. Config will still be written."
+  if ! command -v electrumx_server &>/dev/null; then
+    if [ ! -d /root/electrumx-installer ]; then
+      git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
+    fi
+    set +e
+    (cd /root/electrumx-installer && ./bootstrap.sh)
+    bootstrap_ret=$?
+    set -e
+    if [ $bootstrap_ret -ne 0 ]; then
+      echo "ElectrumX bootstrap failed (exit $bootstrap_ret). Check errors above."
+      # Bootstrap often fails when ~/.electrumx-installer already exists; try running its install.sh
+      if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
+        echo "Running $INSTALLER_HOME/.electrumx-installer/install.sh ..."
+        set +e
+        "$INSTALLER_HOME/.electrumx-installer/install.sh"
+        set -e
+      fi
+      if ! command -v electrumx_server &>/dev/null; then
+        echo "Config will still be written. Install ElectrumX manually if needed."
+      fi
+    fi
   fi
   # Patch coins.py for Lynx (find site-packages path)
   COINS_PY="$(python3 -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
