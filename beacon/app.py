@@ -36,6 +36,7 @@ from beacon.services.pricing import PricingClient
 from beacon.services.rpc import RpcClient
 from beacon.services.system import SystemClient
 import beacon.services.backup as backup_service
+import beacon.services.electrumx as electrumx_service
 import beacon.services.firewall as fw_service
 
 BEACON_REPO = "getlynx/Beacon"
@@ -500,6 +501,62 @@ class DebugLogCard(VerticalScroll):
             lines = [self._convert_utc_timestamps_in_line(ln, tz) for ln in lines]
         except Exception:
             lines = ["Unable to read debug.log"]
+        if not lines:
+            self._content.update("(no log lines)")
+            return
+        texts = [
+            Text(ln, style="dim" if i % 2 == 1 else "")
+            for i, ln in enumerate(lines)
+        ]
+        self._content.update(Group(*texts))
+        if self._scroll_to_bottom_on_next_refresh or at_bottom:
+            self._scroll_to_bottom_on_next_refresh = False
+            self.call_later(self.scroll_end)
+
+
+class ElectrumXLogCard(VerticalScroll):
+    """Card showing last N lines of journalctl -u electrumx; streams when visible."""
+
+    JOURNAL_LINES = 200
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self._refresh_timer: object = None
+        self._scroll_to_bottom_on_next_refresh = False
+        self.border_title = f"{E('📜', '>')} ElectrumX Log"
+        self.border_title_align = ("left", "top")
+        self.border_subtitle = "journalctl -u electrumx"
+        self.border_subtitle_align = ("right", "bottom")
+        self.add_class("card")
+        self.add_class("network")
+        self._content = Static("... loading", classes="network-row-text")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def on_mount(self) -> None:
+        self._start_refresh_timer()
+
+    def on_unmount(self) -> None:
+        self._stop_refresh_timer()
+
+    def _start_refresh_timer(self) -> None:
+        self._stop_refresh_timer()
+        self._refresh_timer = self.set_interval(1.5, self._refresh_lines)
+
+    def _stop_refresh_timer(self) -> None:
+        if self._refresh_timer:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
+
+    def _refresh_lines(self) -> None:
+        if not self.display:
+            return
+        at_bottom = self.is_vertical_scroll_end
+        try:
+            lines = electrumx_service.get_electrumx_journal_lines(self.JOURNAL_LINES)
+        except Exception:
+            lines = ["Unable to read ElectrumX journal."]
         if not lines:
             self._content.update("(no log lines)")
             return
@@ -1666,6 +1723,67 @@ THEME_ORDER = [
 ]
 
 
+class ElectrumXInstallerCard(VerticalScroll):
+    """Card for installing ElectrumX; shows RAM requirement message or Install button."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = f"{E('⚡', '>')} ElectrumX Installer"
+        self.add_class("card")
+        self.add_class("wide")
+        self._blurb = Static(
+            "Install ElectrumX server for Lynx using this node's RPC. "
+            "Requires 3 GB RAM and a synced chain.",
+            id="electrum-installer-blurb",
+        )
+        self._ram_message = Static("", id="electrum-installer-ram-message")
+        self._install_btn = Button("Install ElectrumX", id="electrum-installer-btn")
+
+    def compose(self) -> ComposeResult:
+        yield self._blurb
+        yield self._ram_message
+        yield self._install_btn
+
+    def refresh_content(self, memory_total_gb: float) -> None:
+        """Update message vs Install button based on RAM (call when card is shown)."""
+        if memory_total_gb < 3.0:
+            self._ram_message.update(
+                "Not enough RAM to run ElectrumX (3 GB required). Installation is not available."
+            )
+            self._ram_message.display = True
+            self._install_btn.display = False
+        else:
+            self._ram_message.display = False
+            self._install_btn.display = True
+
+
+class ElectrumXManagementCard(VerticalScroll):
+    """Card for ElectrumX service control and config path."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = f"{E('⚡', '>')} ElectrumX Management"
+        self.add_class("card")
+        self.add_class("wide")
+        self._conf_path = Static("", id="electrum-management-conf")
+        self._stop_btn = Button("Stop", id="electrum-management-stop")
+        self._start_btn = Button("Start", id="electrum-management-start")
+
+    def compose(self) -> ComposeResult:
+        yield self._conf_path
+        yield self._stop_btn
+        yield self._start_btn
+
+    def refresh_state(self) -> None:
+        """Update conf path and button states from electrumx service."""
+        path = electrumx_service.get_electrumx_conf_path()
+        self._conf_path.update(f"Config: {path}")
+        status = electrumx_service.get_electrumx_status()
+        active = status == "active"
+        self._stop_btn.disabled = not active
+        self._start_btn.disabled = active
+
+
 class Beacon(App):
     FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e", "o", "y")
     BINDINGS = [
@@ -2232,6 +2350,12 @@ class Beacon(App):
             f"{E('📡', '>')} Network Activity", "activity", id="overview-network"
         )
         self.overview_network.add_class("wide")
+        self.electrum_installer_card = ElectrumXInstallerCard(id="electrum-installer-card")
+        self.electrum_installer_card.display = False
+        self.electrum_management_card = ElectrumXManagementCard(id="electrum-management-card")
+        self.electrum_management_card.display = False
+        self._show_electrum_card = False
+        self._is_synced = False
         self.overview_peers = PeerListPanel(f"{E('🌐', '*')} Peers", "network", id="overview-peers")
         self.overview_addresses = AddressListPanel(
             f"{E('💼', '>')} Addresses", "wallet", id="overview-addresses"
@@ -2256,7 +2380,10 @@ class Beacon(App):
         self.peer_map = PeerMapCard(id="map-peer-map")
         self.map_log_slot = Container(id="map-log-slot")
         self.debug_log_card = DebugLogCard(id="debug-log-card")
+        self.electrumx_log_card = ElectrumXLogCard(id="electrumx-log-card")
+        self.electrumx_log_card.display = False
         self._show_debug_log_card = False
+        self._show_electrumx_log_card = False
         self._map_log_default_set = False
         self._show_peer_location = True  # default: city/state/country; y toggles to IP
         self._peer_location_revert_timer: object = None
@@ -2489,6 +2616,8 @@ class Beacon(App):
                     with Container(id="overview-body"):
                         with self.overview_grid:
                             yield self.overview_network
+                            yield self.electrum_installer_card
+                            yield self.electrum_management_card
                             yield self.overview_peers
                             yield self.timezone_card
                             yield self.overview_addresses
@@ -2504,6 +2633,7 @@ class Beacon(App):
                             with self.map_log_slot:
                                 yield self.peer_map
                                 yield self.debug_log_card
+                                yield self.electrumx_log_card
                             yield self.overview_system
                             yield self.overview_daemon_status
                             yield self.overview_mempool
@@ -2575,6 +2705,8 @@ class Beacon(App):
         self._sync_map_offset_binding()
         self._sync_restart_daemon_binding()
         self._sync_create_address_binding()
+        self._sync_electrum_binding()
+        self._sync_electrumx_log_binding()
         self._set_debug_log_card_visible(self._show_debug_log_card)
         self.set_interval(1.0, self._update_debug_log_countdown)
 
@@ -2843,8 +2975,9 @@ class Beacon(App):
             self._debug_log_revert_timer = None
         self._debug_log_revert_at = None
         self._show_debug_log_card = show_log
-        self.peer_map.display = not show_log
+        self.peer_map.display = not show_log and not self._show_electrumx_log_card
         self.debug_log_card.display = show_log
+        self.electrumx_log_card.display = False
         if show_log:
             self.debug_log_card._scroll_to_bottom_on_next_refresh = True
             self.debug_log_card._refresh_lines()
@@ -2886,6 +3019,47 @@ class Beacon(App):
             return
         self._set_debug_log_card_visible(not self._show_debug_log_card)
 
+    def action_toggle_electrumx_log_card(self) -> None:
+        """Toggle between Peer Map and ElectrumX log in map_log_slot (bound to j, only when ElectrumX installed)."""
+        if self._show_electrumx_log_card:
+            self._show_electrumx_log_card = False
+            self.peer_map.display = True
+            self.debug_log_card.display = self._show_debug_log_card
+            self.electrumx_log_card.display = False
+        else:
+            if self._debug_log_revert_timer:
+                self._debug_log_revert_timer.stop()
+                self._debug_log_revert_timer = None
+            self._debug_log_revert_at = None
+            self._show_debug_log_card = False
+            self._show_electrumx_log_card = True
+            self.peer_map.display = False
+            self.debug_log_card.display = False
+            self.electrumx_log_card.display = True
+            self.electrumx_log_card._scroll_to_bottom_on_next_refresh = True
+            self.electrumx_log_card._refresh_lines()
+
+    def action_toggle_electrum_card(self) -> None:
+        """Toggle between Network Activity and ElectrumX Installer or Management card (bound to i)."""
+        if self._show_electrum_card:
+            self._show_electrum_card = False
+            self.overview_network.display = True
+            self.electrum_installer_card.display = False
+            self.electrum_management_card.display = False
+        else:
+            self._show_electrum_card = True
+            self.overview_network.display = False
+            if electrumx_service.is_electrumx_installed():
+                self.electrum_installer_card.display = False
+                self.electrum_management_card.display = True
+                self.electrum_management_card.refresh_state()
+            else:
+                self.electrum_installer_card.display = True
+                self.electrum_management_card.display = False
+                stats = self.system.get_system_stats()
+                ram_gb = stats.get("memory_total_gb") or 0.0
+                self.electrum_installer_card.refresh_content(ram_gb)
+
     def action_toggle_fullscreen_map(self) -> None:
         """Toggle temporary fullscreen map view (bound to M key)."""
         self._set_fullscreen_map_active(not self._map_fullscreen_active)
@@ -2916,6 +3090,8 @@ class Beacon(App):
             self.peer_map._suppress_render = True
             self.peer_map.styles.min_width = 52
             self.peer_map.styles.min_height = 22
+            self._show_electrumx_log_card = False
+            self.electrumx_log_card.display = False
             self._set_debug_log_card_visible(self._show_debug_log_card)
         if self._map_fullscreen_timer:
             self._map_fullscreen_timer.stop()
@@ -3005,6 +3181,9 @@ class Beacon(App):
         self.currency_card.display = self._show_currency_card
         self.overview_value.display = not self._show_currency_card
         self.overview_daemon_status.display = not self._show_currency_card
+        self.electrum_installer_card.display = False
+        self.electrum_management_card.display = False
+        self._show_electrum_card = False
 
     def _refresh_peer_map_center(self) -> None:
         effective_center = self._last_node_center_lon if self._map_center_on_node else None
@@ -3185,6 +3364,18 @@ class Beacon(App):
                 await self._handle_firewall_port(port, enabled)
             except (ValueError, IndexError):
                 pass
+            return
+
+        if btn_id == "electrum-installer-btn":
+            await self._handle_electrum_install()
+            return
+
+        if btn_id == "electrum-management-stop":
+            await self._handle_electrum_stop()
+            return
+
+        if btn_id == "electrum-management-start":
+            await self._handle_electrum_start()
             return
 
         if btn_id == "backup-manual":
@@ -3405,6 +3596,72 @@ class Beacon(App):
         if not ok:
             self.notify(msg, title="Firewall error", severity="error", timeout=5)
         self.firewall_card.refresh_state()
+
+    async def _handle_electrum_stop(self) -> None:
+        """Stop ElectrumX service."""
+        ok, msg = await asyncio.get_event_loop().run_in_executor(
+            None, electrumx_service.stop_electrumx
+        )
+        if ok:
+            self.notify("ElectrumX stopped.", severity="information", timeout=3)
+        else:
+            self.notify(msg or "Stop failed", title="ElectrumX", severity="error", timeout=5)
+        self.electrum_management_card.refresh_state()
+
+    async def _handle_electrum_start(self) -> None:
+        """Start ElectrumX service."""
+        ok, msg = await asyncio.get_event_loop().run_in_executor(
+            None, electrumx_service.start_electrumx
+        )
+        if ok:
+            self.notify("ElectrumX started.", severity="information", timeout=3)
+        else:
+            self.notify(msg or "Start failed", title="ElectrumX", severity="error", timeout=5)
+        self.electrum_management_card.refresh_state()
+
+    async def _handle_electrum_install(self) -> None:
+        """Run ElectrumX install script (scripts/electrumx-install.sh or INSTALL_ROOT)."""
+        script = Path(INSTALL_ROOT) / "electrumx-install.sh"
+        if not script.exists():
+            script = Path(__file__).resolve().parent.parent / "scripts" / "electrumx-install.sh"
+        if not script.exists():
+            self.notify(
+                "Install script not found. Run the Beacon installer to add ElectrumX support.",
+                title="ElectrumX Install",
+                severity="error",
+                timeout=8,
+            )
+            return
+        self.notify("ElectrumX install started (see terminal for progress)...", severity="information", timeout=5)
+        env = os.environ.copy()
+        env["LYNX_WORKING_DIR"] = LYNX_WORKING_DIR
+
+        def _run() -> tuple[bool, str]:
+            try:
+                result = subprocess.run(
+                    ["bash", str(script)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                if result.returncode == 0:
+                    return True, result.stdout or ""
+                return False, (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
+            except subprocess.TimeoutExpired:
+                return False, "Install timed out (10 min)."
+            except Exception as exc:
+                return False, str(exc)
+
+        success, out = await asyncio.get_event_loop().run_in_executor(None, _run)
+        if success:
+            self.notify("ElectrumX installed. Switch to Management (press i) to start.", severity="information", timeout=8)
+            self._sync_electrum_binding()
+            self._sync_electrumx_log_binding()
+            self.electrum_management_card.refresh_state()
+            await self.refresh_data()
+        else:
+            self.notify(out[:400] if out else "Install failed", title="ElectrumX Install", severity="error", timeout=10)
 
     async def _monitor_ssh_port(self) -> None:
         """Poll sshd_config every 30s; rebuild firewall rules if SSH port changed."""
@@ -4145,6 +4402,7 @@ class Beacon(App):
                 self._wallet_unlock_purpose = None
             self._sync_wallet_binding()
         self.difficulty_chart.set_syncing(is_syncing)
+        self._is_synced = not is_syncing
         self._schedule_update(
             0.1,
             lambda: self.overview_network.update_entries(
@@ -4194,6 +4452,7 @@ class Beacon(App):
             ),
         )
         self._sync_create_address_binding()
+        self._sync_electrum_binding()
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
         staking_status = (
             "enabled" if self._staking_enabled is True
@@ -4607,6 +4866,49 @@ class Beacon(App):
             self.bind("c", "create_new_address", description="New Address")
             self.refresh_bindings()
 
+    def _sync_electrum_binding(self) -> None:
+        """Show or hide the 'i' key for ElectrumX card based on RAM, sync, and install state."""
+        if self._map_fullscreen_active:
+            if "i" in self._bindings.key_to_bindings:
+                self._bindings.key_to_bindings.pop("i", None)
+            self.refresh_bindings()
+            return
+        installed = electrumx_service.is_electrumx_installed()
+        stats = self.system.get_system_stats()
+        ram_gb = stats.get("memory_total_gb") or 0.0
+        eligible = ram_gb >= 3.0 and self._is_synced
+        show_i = (eligible and not installed) or installed
+        has_binding = "i" in self._bindings.key_to_bindings
+        if show_i:
+            label = "ElectrumX" if installed else "ElectrumX Install"
+            if has_binding:
+                bindings_list = self._bindings.key_to_bindings.get("i")
+                if bindings_list:
+                    self._bindings.key_to_bindings["i"] = [
+                        dataclass_replace(b, description=label) for b in bindings_list
+                    ]
+            else:
+                self.bind("i", "toggle_electrum_card", description=label)
+        elif has_binding:
+            self._bindings.key_to_bindings.pop("i", None)
+        self.refresh_bindings()
+
+    def _sync_electrumx_log_binding(self) -> None:
+        """Show or hide the 'j' key (ElectrumX log) in the footer; only when ElectrumX is installed."""
+        if self._map_fullscreen_active:
+            if "j" in self._bindings.key_to_bindings:
+                self._bindings.key_to_bindings.pop("j", None)
+            self.refresh_bindings()
+            return
+        show_j = electrumx_service.is_electrumx_installed()
+        has_binding = "j" in self._bindings.key_to_bindings
+        if show_j:
+            if not has_binding:
+                self.bind("j", "toggle_electrumx_log_card", description="ElectrumX Log")
+        elif has_binding:
+            self._bindings.key_to_bindings.pop("j", None)
+        self.refresh_bindings()
+
     def _schedule_send_sweep_reset_if_hidden(self) -> None:
         """If Send/Sweep hotkeys would be hidden and a card is visible, reset to difficulty chart in 5s."""
         send_sweep_hidden = (
@@ -4671,6 +4973,8 @@ class Beacon(App):
                 self.bind(key, action, description=description)
         self._sync_create_address_binding()
         self._sync_restart_daemon_binding()
+        self._sync_electrum_binding()
+        self._sync_electrumx_log_binding()
 
     def _sync_map_offset_binding(self) -> None:
         """Show map offset hotkey only during fullscreen map mode."""
