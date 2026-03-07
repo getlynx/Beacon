@@ -126,6 +126,47 @@ SERVICES=rpc://
 EOF
 fi
 
+# Ensure electrumx user exists (bootstrap may not create it)
+if ! getent passwd electrumx &>/dev/null; then
+  useradd -r -s /bin/false -d /db electrumx 2>/dev/null || true
+  chown electrumx:electrumx /db 2>/dev/null || true
+fi
+
+# Create systemd unit if missing (bootstrap may not install it)
+if [ ! -f /etc/systemd/system/electrumx.service ]; then
+  ELECTRUMX_SERVER="$(command -v electrumx_server 2>/dev/null)" || true
+  if [ -z "$ELECTRUMX_SERVER" ]; then
+    for cand in /usr/local/bin/electrumx_server /root/electrumx-installer/venv/bin/electrumx_server; do
+      if [ -x "$cand" ]; then
+        ELECTRUMX_SERVER="$cand"
+        break
+      fi
+    done
+  fi
+  if [ -z "$ELECTRUMX_SERVER" ]; then
+    ELECTRUMX_SERVER="/usr/local/bin/electrumx_server"
+  fi
+  ELECTRUMX_RPC="$(command -v electrumx_rpc 2>/dev/null)" || true
+  [ -z "$ELECTRUMX_RPC" ] && ELECTRUMX_RPC="/usr/local/bin/electrumx_rpc"
+  cat > /etc/systemd/system/electrumx.service << UNITEOF
+[Unit]
+Description=ElectrumX
+After=network.target
+
+[Service]
+EnvironmentFile=/etc/electrumx.conf
+ExecStart=$ELECTRUMX_SERVER
+ExecStop=$ELECTRUMX_RPC -p 8000 stop
+User=electrumx
+LimitNOFILE=8192
+TimeoutStopSec=30min
+
+[Install]
+WantedBy=multi-user.target
+UNITEOF
+  systemctl daemon-reload
+fi
+
 systemctl enable electrumx 2>/dev/null || true
 if ! systemctl restart electrumx 2>/dev/null && ! systemctl start electrumx 2>/dev/null; then
   echo "Could not start electrumx.service (unit may not exist yet). Config written to $ELECTRUMX_CONF"
