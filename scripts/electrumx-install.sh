@@ -34,12 +34,25 @@ fi
 if ! command -v electrumx_server &>/dev/null; then
   echo "Installing ElectrumX..."
   apt-get update -y
-  apt-get install -y git python3-pip gcc g++ librocksdb-dev build-essential \
-    libsnappy-dev zlib1g-dev libbz2-dev libgflags-dev liblz4-dev libzstd-dev
+  set +e
+  apt-get install -y git python3-pip gcc g++ build-essential \
+    libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev libleveldb-dev
+  apt_ret=$?
+  set -e
+  if [ $apt_ret -ne 0 ]; then
+    echo "apt-get install had errors (exit $apt_ret). Trying optional packages separately..."
+    apt-get install -y libleveldb-dev 2>/dev/null || true
+  fi
   if [ ! -d /root/electrumx-installer ]; then
     git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
   fi
+  set +e
   (cd /root/electrumx-installer && ./bootstrap.sh)
+  bootstrap_ret=$?
+  set -e
+  if [ $bootstrap_ret -ne 0 ]; then
+    echo "ElectrumX bootstrap failed (exit $bootstrap_ret). Check errors above. Config will still be written."
+  fi
   # Patch coins.py for Lynx (find site-packages path)
   COINS_PY="$(python3 -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
   if [ -n "$COINS_PY" ] && [ -f "$COINS_PY" ]; then
@@ -92,7 +105,7 @@ if [ -n "${ELECTRUMX_DOMAIN:-}" ]; then
 DB_DIRECTORY=/db
 DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
 COIN=Lynx
-DB_ENGINE=rocksdb
+DB_ENGINE=leveldb
 COST_SOFT_LIMIT=0
 COST_HARD_LIMIT=0
 SSL_CERTFILE=/etc/letsencrypt/live/${ELECTRUMX_DOMAIN}/fullchain.pem
@@ -106,7 +119,7 @@ else
 DB_DIRECTORY=/db
 DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
 COIN=Lynx
-DB_ENGINE=rocksdb
+DB_ENGINE=leveldb
 COST_SOFT_LIMIT=0
 COST_HARD_LIMIT=0
 SERVICES=rpc://
@@ -114,5 +127,9 @@ EOF
 fi
 
 systemctl enable electrumx 2>/dev/null || true
-systemctl restart electrumx 2>/dev/null || systemctl start electrumx
+if ! systemctl restart electrumx 2>/dev/null && ! systemctl start electrumx 2>/dev/null; then
+  echo "Could not start electrumx.service (unit may not exist yet). Config written to $ELECTRUMX_CONF"
+  echo "Run: systemctl start electrumx   after the electrumx package is installed."
+  exit 0
+fi
 echo "ElectrumX configured and started. Config: $ELECTRUMX_CONF"
