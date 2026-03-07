@@ -3655,22 +3655,25 @@ class Beacon(App):
                 timeout=8,
             )
             return
-        self.notify("ElectrumX install started (see terminal for progress)...", severity="information", timeout=5)
+        self.notify(
+            "ElectrumX install running in this terminal (5–10 min). Watch for apt/git output below.",
+            severity="information",
+            timeout=8,
+        )
         env = os.environ.copy()
         env["LYNX_WORKING_DIR"] = LYNX_WORKING_DIR
 
         def _run() -> tuple[bool, str]:
             try:
+                # Run with stdout/stderr attached to terminal so user sees apt, git, etc.
                 result = subprocess.run(
                     ["bash", str(script)],
                     env=env,
-                    capture_output=True,
-                    text=True,
                     timeout=600,
                 )
                 if result.returncode == 0:
-                    return True, result.stdout or ""
-                return False, (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
+                    return True, ""
+                return False, f"Exit code {result.returncode}. See terminal output above for details."
             except subprocess.TimeoutExpired:
                 return False, "Install timed out (10 min)."
             except Exception as exc:
