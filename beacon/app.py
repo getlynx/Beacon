@@ -1508,6 +1508,29 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None, str | None]]):
                 self.dismiss((pwd, duration, purpose))
 
 
+class ElectrumXDomainScreen(ModalScreen[str | None]):
+    """Modal to enter ElectrumX SSL domain (e.g. electrum8.getlynx.io)."""
+
+    def compose(self) -> ComposeResult:
+        with Container(id="electrumx-domain-modal"):
+            yield Static("Domain for ElectrumX SSL (used for cert paths and REPORT_SERVICES):", id="electrumx-domain-label")
+            yield Input(placeholder="e.g. electrum8.getlynx.io", id="electrumx-domain-input")
+            with Container(id="electrumx-domain-actions"):
+                yield Button("Cancel", id="electrumx-domain-cancel")
+                yield Button("Continue", id="electrumx-domain-continue", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#electrumx-domain-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "electrumx-domain-cancel":
+            self.dismiss(None)
+        elif event.button.id == "electrumx-domain-continue":
+            inp = self.query_one("#electrumx-domain-input", Input)
+            domain = (inp.value or "").strip()
+            self.dismiss(domain if domain else None)
+
+
 class FirewallCard(VerticalScroll):
     """Settings card for managing the system firewall (UFW / firewalld)."""
 
@@ -2159,6 +2182,21 @@ class Beacon(App):
         padding: 2;
         width: 50;
         height: auto;
+    }
+    #electrumx-domain-modal {
+        padding: 2;
+        width: 50;
+        height: auto;
+    }
+    #electrumx-domain-label {
+        padding: 1 0;
+    }
+    #electrumx-domain-input {
+        width: 1fr;
+        margin: 1 0;
+    }
+    #electrumx-domain-actions {
+        padding-top: 1;
     }
     #wallet-password-label,
     #wallet-password-confirm-label,
@@ -3626,14 +3664,26 @@ class Beacon(App):
         self.electrum_management_card.refresh_state()
 
     async def _handle_electrum_install(self, reinstall: bool = False) -> None:
-        """Run ElectrumX install script (scripts/electrumx-install.sh or INSTALL_ROOT). If reinstall=True, sets REINSTALL_ELECTRUMX=1 to update and reset config + coins.py."""
+        """Prompt for ElectrumX domain then run install script. If reinstall=True, sets REINSTALL_ELECTRUMX=1."""
+        self.push_screen(
+            ElectrumXDomainScreen(),
+            lambda domain: self._on_electrum_domain_entered(domain, reinstall),
+        )
+
+    def _on_electrum_domain_entered(self, domain: str | None, reinstall: bool) -> None:
+        """Schedule install script after domain screen (sync callback)."""
+        if not domain:
+            return
+        asyncio.ensure_future(self._run_electrum_install_script(domain, reinstall))
+
+    async def _run_electrum_install_script(self, domain: str, reinstall: bool) -> None:
+        """Run ElectrumX install script with ELECTRUMX_DOMAIN set."""
         script = Path(INSTALL_ROOT) / "electrumx-install.sh"
         if not script.exists():
             script = Path(INSTALL_ROOT) / "app" / "scripts" / "electrumx-install.sh"
         if not script.exists():
             script = Path(__file__).resolve().parent.parent / "scripts" / "electrumx-install.sh"
         if not script.exists():
-            # On-demand download so updated users get the script without re-running installer
             self.notify("Downloading ElectrumX install script...", title="ElectrumX Install", timeout=5)
             try:
                 import urllib.request
@@ -3670,12 +3720,12 @@ class Beacon(App):
         )
         env = os.environ.copy()
         env["LYNX_WORKING_DIR"] = LYNX_WORKING_DIR
+        env["ELECTRUMX_DOMAIN"] = domain
         if reinstall:
             env["REINSTALL_ELECTRUMX"] = "1"
 
         def _run() -> tuple[bool, str]:
             try:
-                # Run with stdout/stderr attached to terminal so user sees apt, git, etc.
                 result = subprocess.run(
                     ["bash", str(script)],
                     env=env,
@@ -3692,9 +3742,11 @@ class Beacon(App):
         success, out = await asyncio.get_event_loop().run_in_executor(None, _run)
         if success:
             self.notify(
-                "ElectrumX updated. Config and coins.py reset." if reinstall else "ElectrumX installed. Switch to Management (press i) to start.",
+                "ElectrumX updated. Config and coins.py reset. Add Cloudflare 15-Yr Origin cert to the .pem paths shown in terminal."
+                if reinstall
+                else "ElectrumX installed. Add Cloudflare 15-Yr Origin cert to the .pem paths shown in terminal. Switch to Management (press i) to start.",
                 severity="information",
-                timeout=8,
+                timeout=10,
             )
             self._sync_electrum_binding()
             self._sync_electrumx_log_binding()

@@ -1,6 +1,6 @@
 #!/bin/bash
 # ElectrumX install for Beacon: uses existing Lynx node at LYNX_WORKING_DIR.
-# Requires root. Set ELECTRUMX_DOMAIN for SSL (e.g. electrum.example.com); omit for RPC-only.
+# Prompts for ELECTRUMX_DOMAIN (or set env) for SSL cert paths; config uses Cloudflare Origin Cert.
 # Set REINSTALL_ELECTRUMX=1 to update ElectrumX and reset coins.py + /etc/electrumx.conf.
 set -euo pipefail
 
@@ -152,40 +152,49 @@ fi
 mkdir -p /db
 chown electrumx:electrumx /db 2>/dev/null || true
 
-# Build config
-if [ -n "${ELECTRUMX_DOMAIN:-}" ]; then
-  # SSL with Certbot
-  if [ ! -d "/etc/letsencrypt/live/$ELECTRUMX_DOMAIN" ]; then
-    apt-get install -y certbot 2>/dev/null || true
-    certbot certonly --standalone -n -d "$ELECTRUMX_DOMAIN" -m "domains@getlynx.io" --agree-tos || true
-    chown -R electrumx:electrumx /etc/letsencrypt 2>/dev/null || true
+# Domain for SSL is required (e.g. electrum8.getlynx.io); used for cert paths and REPORT_SERVICES
+if [ -z "${ELECTRUMX_DOMAIN:-}" ]; then
+  if [ -t 0 ]; then
+    echo ""
+    read -rp "Enter domain name for ElectrumX SSL (e.g. electrum8.getlynx.io): " ELECTRUMX_DOMAIN
+    ELECTRUMX_DOMAIN="${ELECTRUMX_DOMAIN// /}"
   fi
-  cat > "$ELECTRUMX_CONF" << EOF
+  if [ -z "${ELECTRUMX_DOMAIN:-}" ]; then
+    echo "ElectrumX domain is required. Set ELECTRUMX_DOMAIN or enter it when prompted. Aborting."
+    exit 1
+  fi
+fi
+
+# Create cert directory so user can place Cloudflare Origin Cert files (fullchain.pem, privkey.pem)
+CERT_DIR="/etc/letsencrypt/live/${ELECTRUMX_DOMAIN}"
+mkdir -p "$CERT_DIR"
+chown electrumx:electrumx /etc/letsencrypt 2>/dev/null || true
+chown -R electrumx:electrumx "$CERT_DIR" 2>/dev/null || true
+
+# Config always uses SSL block; user must add Cloudflare 15-Year Origin Cert to the two .pem paths
+cat > "$ELECTRUMX_CONF" << EOF
 DB_DIRECTORY=/db
 DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
 COIN=Lynx
 DB_ENGINE=rocksdb
 COST_SOFT_LIMIT=0
 COST_HARD_LIMIT=0
-SSL_CERTFILE=/etc/letsencrypt/live/${ELECTRUMX_DOMAIN}/fullchain.pem
-SSL_KEYFILE=/etc/letsencrypt/live/${ELECTRUMX_DOMAIN}/privkey.pem
+SSL_CERTFILE=${CERT_DIR}/fullchain.pem
+SSL_KEYFILE=${CERT_DIR}/privkey.pem
 SERVICES=ssl://:${ELECTRUMX_SSL_PORT},wss://:${ELECTRUMX_WSS_PORT},rpc://
 REPORT_SERVICES=wss://${ELECTRUMX_DOMAIN}:${ELECTRUMX_WSS_PORT},ssl://${ELECTRUMX_DOMAIN}:${ELECTRUMX_SSL_PORT}
 HOST=
 EOF
-else
-  # RPC only (no SSL)
-  cat > "$ELECTRUMX_CONF" << EOF
-DB_DIRECTORY=/db
-DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
-COIN=Lynx
-DB_ENGINE=rocksdb
-COST_SOFT_LIMIT=0
-COST_HARD_LIMIT=0
-SERVICES=rpc://
-HOST=
-EOF
-fi
+
+echo ""
+echo "--- ElectrumX SSL: Cloudflare 15-Year Origin Certificate ---"
+echo "To enable SSL, create a 15-Year Origin Certificate in Cloudflare (SSL/TLS -> Origin Server)."
+echo "Then copy the certificate and private key into:"
+echo "  Certificate: $CERT_DIR/fullchain.pem"
+echo "  Private key: $CERT_DIR/privkey.pem"
+echo "Ensure the electrumx user can read both files (e.g. chown electrumx:electrumx $CERT_DIR/*.pem)."
+echo "----------------------------------------------------------------"
+echo ""
 
 # Ensure electrumx user exists (bootstrap may not create it)
 if ! getent passwd electrumx &>/dev/null; then
