@@ -224,9 +224,11 @@ if [ -z "$ELECTRUMX_RPC" ]; then
 fi
 [ -z "$ELECTRUMX_RPC" ] && ELECTRUMX_RPC="/usr/local/bin/electrumx_rpc"
 
-# Create or fix systemd unit (rewrite if current ExecStart is missing, e.g. unit points to /usr/local but we use /opt/electrumx)
+# Create or fix systemd unit: always recreate when we just updated ElectrumX, or when unit is missing / ExecStart is broken
 NEED_UNIT_WRITE=false
-if [ ! -f /etc/systemd/system/electrumx.service ]; then
+if [ "$REINSTALL_ELECTRUMX" = "1" ]; then
+  NEED_UNIT_WRITE=true
+elif [ ! -f /etc/systemd/system/electrumx.service ]; then
   NEED_UNIT_WRITE=true
 elif [ -x "$ELECTRUMX_SERVER" ]; then
   CURRENT_EXEC="$(grep '^ExecStart=' /etc/systemd/system/electrumx.service 2>/dev/null | sed 's/^ExecStart=//')"
