@@ -1758,7 +1758,7 @@ class ElectrumXInstallerCard(VerticalScroll):
 
 
 class ElectrumXManagementCard(VerticalScroll):
-    """Card for ElectrumX service control and config path."""
+    """Card for ElectrumX service control, config path, and reinstall."""
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -1768,11 +1768,13 @@ class ElectrumXManagementCard(VerticalScroll):
         self._conf_path = Static("", id="electrum-management-conf")
         self._stop_btn = Button("Stop", id="electrum-management-stop")
         self._start_btn = Button("Start", id="electrum-management-start")
+        self._reinstall_btn = Button("Reinstall / Update", id="electrum-management-reinstall")
 
     def compose(self) -> ComposeResult:
         yield self._conf_path
         yield self._stop_btn
         yield self._start_btn
+        yield self._reinstall_btn
 
     def refresh_state(self) -> None:
         """Update conf path and button states from electrumx service."""
@@ -3378,6 +3380,10 @@ class Beacon(App):
             await self._handle_electrum_start()
             return
 
+        if btn_id == "electrum-management-reinstall":
+            await self._handle_electrum_reinstall()
+            return
+
         if btn_id == "backup-manual":
             await self._handle_backup_manual()
             return
@@ -3619,8 +3625,8 @@ class Beacon(App):
             self.notify(msg or "Start failed", title="ElectrumX", severity="error", timeout=5)
         self.electrum_management_card.refresh_state()
 
-    async def _handle_electrum_install(self) -> None:
-        """Run ElectrumX install script (scripts/electrumx-install.sh or INSTALL_ROOT)."""
+    async def _handle_electrum_install(self, reinstall: bool = False) -> None:
+        """Run ElectrumX install script (scripts/electrumx-install.sh or INSTALL_ROOT). If reinstall=True, sets REINSTALL_ELECTRUMX=1 to update and reset config + coins.py."""
         script = Path(INSTALL_ROOT) / "electrumx-install.sh"
         if not script.exists():
             script = Path(INSTALL_ROOT) / "app" / "scripts" / "electrumx-install.sh"
@@ -3656,12 +3662,16 @@ class Beacon(App):
             )
             return
         self.notify(
-            "ElectrumX install running in this terminal (5–10 min). Watch for apt/git output below.",
+            "ElectrumX reinstall/update running in this terminal (resets config and coins.py). Watch output below."
+            if reinstall
+            else "ElectrumX install running in this terminal (5–10 min). Watch for apt/git output below.",
             severity="information",
             timeout=8,
         )
         env = os.environ.copy()
         env["LYNX_WORKING_DIR"] = LYNX_WORKING_DIR
+        if reinstall:
+            env["REINSTALL_ELECTRUMX"] = "1"
 
         def _run() -> tuple[bool, str]:
             try:
@@ -3681,13 +3691,21 @@ class Beacon(App):
 
         success, out = await asyncio.get_event_loop().run_in_executor(None, _run)
         if success:
-            self.notify("ElectrumX installed. Switch to Management (press i) to start.", severity="information", timeout=8)
+            self.notify(
+                "ElectrumX updated. Config and coins.py reset." if reinstall else "ElectrumX installed. Switch to Management (press i) to start.",
+                severity="information",
+                timeout=8,
+            )
             self._sync_electrum_binding()
             self._sync_electrumx_log_binding()
             self.electrum_management_card.refresh_state()
             await self.refresh_data()
         else:
             self.notify(out[:400] if out else "Install failed", title="ElectrumX Install", severity="error", timeout=10)
+
+    async def _handle_electrum_reinstall(self) -> None:
+        """Run ElectrumX install script with REINSTALL_ELECTRUMX=1 to update and reset config + coins.py."""
+        await self._handle_electrum_install(reinstall=True)
 
     async def _monitor_ssh_port(self) -> None:
         """Poll sshd_config every 30s; rebuild firewall rules if SSH port changed."""
