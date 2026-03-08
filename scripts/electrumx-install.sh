@@ -67,6 +67,16 @@ if [ "$DO_INSTALL" = true ]; then
   else
     # First-time install
     echo "Installing ElectrumX via https://github.com/MadCatMining/electrumx-installer ..."
+    # MadCatMining installer requires Python 3.9 and creates /usr/local/bin/python3.9. Remove any existing file/link so installer does not fail with "File exists".
+    if [ -e /usr/local/bin/python3.9 ]; then
+      echo "Removing existing /usr/local/bin/python3.9 so installer can install Python 3.9."
+      rm -f /usr/local/bin/python3.9
+    fi
+    # If ~/.electrumx-installer exists but ElectrumX did not install (e.g. previous run failed at Python 3.9), remove it so bootstrap gets a clean clone and install.
+    if [ -d "$INSTALLER_HOME/.electrumx-installer" ] && ! [ -x "$INSTALLER_HOME/.electrumx-installer/venv/bin/electrumx_server" ]; then
+      echo "Removing incomplete $INSTALLER_HOME/.electrumx-installer so installer can run from a clean state."
+      rm -rf "$INSTALLER_HOME/.electrumx-installer"
+    fi
     apt-get update -y
     set +e
     apt-get install -y git python3-pip gcc g++ build-essential \
@@ -79,6 +89,7 @@ if [ "$DO_INSTALL" = true ]; then
     fi
     if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
       echo "Found existing $INSTALLER_HOME/.electrumx-installer; running its install.sh ..."
+      rm -f /usr/local/bin/python3.9
       set +e
       "$INSTALLER_HOME/.electrumx-installer/install.sh"
       install_ret=$?
@@ -91,6 +102,7 @@ if [ "$DO_INSTALL" = true ]; then
       if [ ! -d /root/electrumx-installer ]; then
         git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
       fi
+      rm -f /usr/local/bin/python3.9
       set +e
       (cd /root/electrumx-installer && ./bootstrap.sh)
       bootstrap_ret=$?
@@ -99,6 +111,7 @@ if [ "$DO_INSTALL" = true ]; then
         echo "ElectrumX bootstrap failed (exit $bootstrap_ret). Check errors above."
         if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
           echo "Running $INSTALLER_HOME/.electrumx-installer/install.sh ..."
+          rm -f /usr/local/bin/python3.9
           set +e
           "$INSTALLER_HOME/.electrumx-installer/install.sh"
           set -e
@@ -203,35 +216,60 @@ if ! getent passwd electrumx &>/dev/null; then
 fi
 
 # Resolve electrumx_server / electrumx_rpc from MadCatMining installer only (Python 3.9).
-# Do not use /opt/electrumx (old PyPI/Python 3.11 venv) - it can cause ModuleNotFoundError e.g. electrumx.lib.tx_dash.
+# Never use /opt/electrumx (old PyPI/Python 3.11 venv) - causes ModuleNotFoundError e.g. electrumx.lib.tx_dash.
+# Reject any path that resolves (including symlinks) to under /opt/electrumx.
+_reject_opt_electrumx() {
+  local p="$1"
+  [ -z "$p" ] && return 1
+  local r
+  r="$(readlink -f "$p" 2>/dev/null)" || r="$p"
+  case "$r" in /opt/electrumx/*) return 1 ;; *) return 0 ;; esac
+}
 ELECTRUMX_SERVER=""
 for cand in /root/.electrumx-installer/venv/bin/electrumx_server /root/electrumx-installer/venv/bin/electrumx_server /usr/local/bin/electrumx_server; do
-  if [ -x "$cand" ]; then
+  if [ -x "$cand" ] && _reject_opt_electrumx "$cand"; then
     ELECTRUMX_SERVER="$cand"
     break
   fi
 done
 if [ -z "$ELECTRUMX_SERVER" ]; then
   PATH_CAND="$(command -v electrumx_server 2>/dev/null)" || true
-  if [ -n "$PATH_CAND" ] && [ -x "$PATH_CAND" ] && [[ "$PATH_CAND" != /opt/electrumx/* ]]; then
+  if [ -n "$PATH_CAND" ] && [ -x "$PATH_CAND" ] && _reject_opt_electrumx "$PATH_CAND"; then
     ELECTRUMX_SERVER="$PATH_CAND"
   fi
 fi
-[ -z "$ELECTRUMX_SERVER" ] && ELECTRUMX_SERVER="/usr/local/bin/electrumx_server"
+if [ -z "$ELECTRUMX_SERVER" ] || ! _reject_opt_electrumx "$ELECTRUMX_SERVER"; then
+  ELECTRUMX_SERVER="/usr/local/bin/electrumx_server"
+  _reject_opt_electrumx "$ELECTRUMX_SERVER" || ELECTRUMX_SERVER=""
+fi
 ELECTRUMX_RPC=""
 for cand in /root/.electrumx-installer/venv/bin/electrumx_rpc /root/electrumx-installer/venv/bin/electrumx_rpc /usr/local/bin/electrumx_rpc; do
-  if [ -x "$cand" ]; then
+  if [ -x "$cand" ] && _reject_opt_electrumx "$cand"; then
     ELECTRUMX_RPC="$cand"
     break
   fi
 done
 if [ -z "$ELECTRUMX_RPC" ]; then
   PATH_CAND="$(command -v electrumx_rpc 2>/dev/null)" || true
-  if [ -n "$PATH_CAND" ] && [ -x "$PATH_CAND" ] && [[ "$PATH_CAND" != /opt/electrumx/* ]]; then
+  if [ -n "$PATH_CAND" ] && [ -x "$PATH_CAND" ] && _reject_opt_electrumx "$PATH_CAND"; then
     ELECTRUMX_RPC="$PATH_CAND"
   fi
 fi
-[ -z "$ELECTRUMX_RPC" ] && ELECTRUMX_RPC="/usr/local/bin/electrumx_rpc"
+if [ -z "$ELECTRUMX_RPC" ] || ! _reject_opt_electrumx "$ELECTRUMX_RPC"; then
+  ELECTRUMX_RPC="/usr/local/bin/electrumx_rpc"
+  _reject_opt_electrumx "$ELECTRUMX_RPC" || ELECTRUMX_RPC=""
+fi
+
+# If no valid executable (e.g. only /opt/electrumx exists), do not update the unit and instruct user
+if [ -z "$ELECTRUMX_SERVER" ] || [ -z "$ELECTRUMX_RPC" ] || ! [ -x "$ELECTRUMX_SERVER" ]; then
+  CURRENT_UNIT_EXEC="$(grep '^ExecStart=' /etc/systemd/system/electrumx.service 2>/dev/null | sed 's/^ExecStart=//')"
+  if [ -n "$CURRENT_UNIT_EXEC" ] && [[ "$CURRENT_UNIT_EXEC" == /opt/electrumx/* ]]; then
+    echo "The current electrumx.service points to /opt/electrumx (incompatible)."
+    echo "Install ElectrumX via MadCatMining first: run this script without REINSTALL_ELECTRUMX=1, or use Install from Beacon."
+    echo "Then run again with REINSTALL_ELECTRUMX=1 to point the unit at the correct executable."
+    exit 1
+  fi
+fi
 
 # Create or fix systemd unit: always recreate when we just updated ElectrumX, or when unit is missing / ExecStart is broken
 NEED_UNIT_WRITE=false
