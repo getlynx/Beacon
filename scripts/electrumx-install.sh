@@ -21,14 +21,18 @@ if [ ! -f "$LYNX_CONF" ]; then
   exit 1
 fi
 
-# RPC from lynx.conf (Beacon default path)
-rpcuser="$(sed -ne 's|[ \t]*rpcuser=[ \t]*||p' "$LYNX_CONF" | tr -d '\r')"
-rpcpassword="$(sed -ne 's|[ \t]*rpcpassword=[ \t]*||p' "$LYNX_CONF" | tr -d '\r')"
-rpcport="$(sed -ne 's|[ \t]*rpcport=[ \t]*||p' "$LYNX_CONF" | tr -d '\r')"
+# RPC from lynx.conf: use only mainnet (main.*) values; ignore testnet (test.*)
+rpcuser="$(sed -ne 's|[ \t]*main\.rpcuser=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
+rpcpassword="$(sed -ne 's|[ \t]*main\.rpcpassword=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
+rpcport="$(sed -ne 's|[ \t]*main\.rpcport=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
+# Fallback for lynx.conf with unprefixed keys (older format)
+[ -z "$rpcuser" ] && rpcuser="$(sed -ne 's|[ \t]*rpcuser=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
+[ -z "$rpcpassword" ] && rpcpassword="$(sed -ne 's|[ \t]*rpcpassword=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
+[ -z "$rpcport" ] && rpcport="$(sed -ne 's|[ \t]*rpcport=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
 rpcport="${rpcport:-9332}"
 
 if [ -z "$rpcuser" ] || [ -z "$rpcpassword" ]; then
-  echo "Could not read rpcuser/rpcpassword from $LYNX_CONF"
+  echo "Could not read main.rpcuser/main.rpcpassword (or rpcuser/rpcpassword) from $LYNX_CONF"
   exit 1
 fi
 
@@ -66,12 +70,12 @@ if [ "$DO_INSTALL" = true ]; then
     apt-get update -y
     set +e
     apt-get install -y git python3-pip gcc g++ build-essential \
-      libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev libleveldb-dev
+      libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev librocksdb-dev
     apt_ret=$?
     set -e
     if [ $apt_ret -ne 0 ]; then
       echo "apt-get install had errors (exit $apt_ret). Trying optional packages separately..."
-      apt-get install -y libleveldb-dev 2>/dev/null || true
+      apt-get install -y librocksdb-dev 2>/dev/null || true
     fi
     if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
       echo "Found existing $INSTALLER_HOME/.electrumx-installer; running its install.sh ..."
@@ -160,13 +164,14 @@ if [ -n "${ELECTRUMX_DOMAIN:-}" ]; then
 DB_DIRECTORY=/db
 DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
 COIN=Lynx
-DB_ENGINE=leveldb
+DB_ENGINE=rocksdb
 COST_SOFT_LIMIT=0
 COST_HARD_LIMIT=0
 SSL_CERTFILE=/etc/letsencrypt/live/${ELECTRUMX_DOMAIN}/fullchain.pem
 SSL_KEYFILE=/etc/letsencrypt/live/${ELECTRUMX_DOMAIN}/privkey.pem
 SERVICES=ssl://:${ELECTRUMX_SSL_PORT},wss://:${ELECTRUMX_WSS_PORT},rpc://
 REPORT_SERVICES=wss://${ELECTRUMX_DOMAIN}:${ELECTRUMX_WSS_PORT},ssl://${ELECTRUMX_DOMAIN}:${ELECTRUMX_SSL_PORT}
+HOST=
 EOF
 else
   # RPC only (no SSL)
@@ -174,10 +179,11 @@ else
 DB_DIRECTORY=/db
 DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
 COIN=Lynx
-DB_ENGINE=leveldb
+DB_ENGINE=rocksdb
 COST_SOFT_LIMIT=0
 COST_HARD_LIMIT=0
 SERVICES=rpc://
+HOST=
 EOF
 fi
 
