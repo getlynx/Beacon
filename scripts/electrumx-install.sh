@@ -202,25 +202,34 @@ if ! getent passwd electrumx &>/dev/null; then
   chown electrumx:electrumx /db 2>/dev/null || true
 fi
 
-# Resolve electrumx_server / electrumx_rpc (from MadCatMining installer venv or PATH)
-ELECTRUMX_SERVER="$(command -v electrumx_server 2>/dev/null)" || true
+# Resolve electrumx_server / electrumx_rpc from MadCatMining installer only (Python 3.9).
+# Do not use /opt/electrumx (old PyPI/Python 3.11 venv) - it can cause ModuleNotFoundError e.g. electrumx.lib.tx_dash.
+ELECTRUMX_SERVER=""
+for cand in /root/.electrumx-installer/venv/bin/electrumx_server /root/electrumx-installer/venv/bin/electrumx_server /usr/local/bin/electrumx_server; do
+  if [ -x "$cand" ]; then
+    ELECTRUMX_SERVER="$cand"
+    break
+  fi
+done
 if [ -z "$ELECTRUMX_SERVER" ]; then
-  for cand in /usr/local/bin/electrumx_server /root/electrumx-installer/venv/bin/electrumx_server /root/.electrumx-installer/venv/bin/electrumx_server; do
-    if [ -x "$cand" ]; then
-      ELECTRUMX_SERVER="$cand"
-      break
-    fi
-  done
+  PATH_CAND="$(command -v electrumx_server 2>/dev/null)" || true
+  if [ -n "$PATH_CAND" ] && [ -x "$PATH_CAND" ] && [[ "$PATH_CAND" != /opt/electrumx/* ]]; then
+    ELECTRUMX_SERVER="$PATH_CAND"
+  fi
 fi
 [ -z "$ELECTRUMX_SERVER" ] && ELECTRUMX_SERVER="/usr/local/bin/electrumx_server"
-ELECTRUMX_RPC="$(command -v electrumx_rpc 2>/dev/null)" || true
+ELECTRUMX_RPC=""
+for cand in /root/.electrumx-installer/venv/bin/electrumx_rpc /root/electrumx-installer/venv/bin/electrumx_rpc /usr/local/bin/electrumx_rpc; do
+  if [ -x "$cand" ]; then
+    ELECTRUMX_RPC="$cand"
+    break
+  fi
+done
 if [ -z "$ELECTRUMX_RPC" ]; then
-  for cand in /usr/local/bin/electrumx_rpc /root/electrumx-installer/venv/bin/electrumx_rpc /root/.electrumx-installer/venv/bin/electrumx_rpc; do
-    if [ -x "$cand" ]; then
-      ELECTRUMX_RPC="$cand"
-      break
-    fi
-  done
+  PATH_CAND="$(command -v electrumx_rpc 2>/dev/null)" || true
+  if [ -n "$PATH_CAND" ] && [ -x "$PATH_CAND" ] && [[ "$PATH_CAND" != /opt/electrumx/* ]]; then
+    ELECTRUMX_RPC="$PATH_CAND"
+  fi
 fi
 [ -z "$ELECTRUMX_RPC" ] && ELECTRUMX_RPC="/usr/local/bin/electrumx_rpc"
 
