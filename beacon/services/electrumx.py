@@ -78,7 +78,7 @@ def stop_electrumx() -> tuple[bool, str]:
         return False, str(exc)
 
 
-def get_electrumx_journal_lines(n: int = 200) -> list[str]:
+def get_electrumx_journal_lines(n: int = 30) -> list[str]:
     """Return last n lines from journalctl -u electrumx for display in ElectrumXLogCard.
     Uses -o short-precise so output matches journalctl -f -u electrumx -n N (timestamp + unit + message)."""
     if n <= 0:

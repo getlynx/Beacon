@@ -515,9 +515,10 @@ class DebugLogCard(VerticalScroll):
 
 
 class ElectrumXLogCard(VerticalScroll):
-    """Card showing last N lines of journalctl -u electrumx; streams when visible."""
+    """Card showing last N lines of journalctl -u electrumx; streams when visible.
+    Uses same line count as terminal: journalctl -f -u electrumx -n 30."""
 
-    JOURNAL_LINES = 200
+    JOURNAL_LINES = 30
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -525,7 +526,7 @@ class ElectrumXLogCard(VerticalScroll):
         self._scroll_to_bottom_on_next_refresh = False
         self.border_title = f"{E('📜', '>')} ElectrumX Log"
         self.border_title_align = ("left", "top")
-        self.border_subtitle = "journalctl -u electrumx"
+        self.border_subtitle = "journalctl -u electrumx -n 30"
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
         self.add_class("network")
@@ -549,6 +550,10 @@ class ElectrumXLogCard(VerticalScroll):
             self._refresh_timer.stop()
             self._refresh_timer = None
 
+    def _scroll_to_bottom_after_layout(self) -> None:
+        """Scroll to bottom after content has been laid out (so newest lines are visible)."""
+        self.scroll_end()
+
     def _refresh_lines(self) -> None:
         if not self.display:
             return
@@ -568,6 +573,8 @@ class ElectrumXLogCard(VerticalScroll):
         if self._scroll_to_bottom_on_next_refresh or at_bottom:
             self._scroll_to_bottom_on_next_refresh = False
             self.call_later(self.scroll_end)
+            # Also scroll after a short delay so layout has run and we show the tail (newest lines)
+            self.set_timer(0.25, self._scroll_to_bottom_after_layout)
 
 
 class PeerMapCard(Static):
