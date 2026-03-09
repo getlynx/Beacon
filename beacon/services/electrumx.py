@@ -79,12 +79,13 @@ def stop_electrumx() -> tuple[bool, str]:
 
 
 def get_electrumx_journal_lines(n: int = 200) -> list[str]:
-    """Return last n lines from journalctl -u electrumx for display in ElectrumXLogCard."""
+    """Return last n lines from journalctl -u electrumx for display in ElectrumXLogCard.
+    Uses -o short-precise so output matches journalctl -f -u electrumx -n N (timestamp + unit + message)."""
     if n <= 0:
         return []
     try:
         result = subprocess.run(
-            ["journalctl", "-u", "electrumx", "-n", str(n), "--no-pager", "-o", "cat"],
+            ["journalctl", "-u", "electrumx", "-n", str(n), "--no-pager", "-o", "short-precise"],
             capture_output=True,
             text=True,
             timeout=10,

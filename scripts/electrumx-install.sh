@@ -21,6 +21,15 @@ if [ ! -f "$LYNX_CONF" ]; then
   exit 1
 fi
 
+# Ensure mainnet RPC settings exist in lynx.conf so the daemon listens and ElectrumX can connect
+for line in "main.rpcport=9332" "main.rpcbind=127.0.0.1" "main.rpcallowip=127.0.0.1"; do
+  key="${line%=*}"
+  if ! grep -qE "^[ \t]*${key}[ \t]*=" "$LYNX_CONF" 2>/dev/null; then
+    echo "$line" >> "$LYNX_CONF"
+    echo "[Beacon] Added $line to $LYNX_CONF"
+  fi
+done
+
 # RPC from lynx.conf: use only mainnet (main.*) values; ignore testnet (test.*)
 rpcuser="$(sed -ne 's|[ \t]*main\.rpcuser=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
 rpcpassword="$(sed -ne 's|[ \t]*main\.rpcpassword=[ \t]*||p' "$LYNX_CONF" | tr -d '\r' | head -n1)"
@@ -36,95 +45,129 @@ if [ -z "$rpcuser" ] || [ -z "$rpcpassword" ]; then
   exit 1
 fi
 
-# Install or reinstall ElectrumX via MadCatMining electrumx-installer only (PyPI version is not compatible with Lynx)
+# Install or reinstall ElectrumX: prefer system Python 3.10+ (no Python 3.9 install); fallback MadCatMining installer.
 INSTALLER_HOME="${SUDO_HOME:-$HOME}"
 [ -z "$INSTALLER_HOME" ] && INSTALLER_HOME="/root"
+ELECTRUMX_VENV="/usr/local/electrumx-venv"
+ELECTRUMX_GIT_URL="${ELECTRUMX_GIT_URL:-https://github.com/spesmilo/electrumx}"
+
 DO_INSTALL=false
 if [ "$REINSTALL_ELECTRUMX" = "1" ]; then
   DO_INSTALL=true
-elif ! command -v electrumx_server &>/dev/null; then
+elif ! command -v electrumx_server &>/dev/null && ! [ -x "$ELECTRUMX_VENV/bin/electrumx_server" ]; then
   DO_INSTALL=true
+fi
+
+USE_SYSTEM_PYTHON=false
+if command -v python3 &>/dev/null; then
+  PY_MINOR="$(python3 -c "import sys; print(sys.version_info.minor)" 2>/dev/null)" || true
+  if [ -n "$PY_MINOR" ] && [ "$PY_MINOR" -ge 10 ]; then
+    USE_SYSTEM_PYTHON=true
+  fi
 fi
 
 if [ "$DO_INSTALL" = true ]; then
   ALREADY_INSTALLED=false
   command -v electrumx_server &>/dev/null && ALREADY_INSTALLED=true
+  [ -x "$ELECTRUMX_VENV/bin/electrumx_server" ] && ALREADY_INSTALLED=true
 
-  if [ "$ALREADY_INSTALLED" = true ] && [ "$REINSTALL_ELECTRUMX" = "1" ]; then
-    echo "Reinstalling/updating ElectrumX (will reset /etc/electrumx.conf and re-apply Lynx patch to coins.py)..."
-    set +e
-    if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
-      "$INSTALLER_HOME/.electrumx-installer/install.sh" --update 2>/dev/null || "$INSTALLER_HOME/.electrumx-installer/install.sh"
-    elif [ -d /root/electrumx-installer ]; then
-      (cd /root/electrumx-installer && ./bootstrap.sh --update 2>/dev/null) || (cd /root/electrumx-installer && ./bootstrap.sh)
-    else
-      if [ ! -d /root/electrumx-installer ]; then
-        git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
-      fi
-      (cd /root/electrumx-installer && ./bootstrap.sh --update 2>/dev/null) || (cd /root/electrumx-installer && ./bootstrap.sh)
-    fi
-    set -e
-  else
-    # First-time install
-    echo "Installing ElectrumX via https://github.com/MadCatMining/electrumx-installer ..."
-    # MadCatMining installer requires Python 3.9 and creates /usr/local/bin/python3.9. Remove any existing file/link so installer does not fail with "File exists".
-    if [ -e /usr/local/bin/python3.9 ]; then
-      echo "Removing existing /usr/local/bin/python3.9 so installer can install Python 3.9."
-      rm -f /usr/local/bin/python3.9
-    fi
-    # If ~/.electrumx-installer exists but ElectrumX did not install (e.g. previous run failed at Python 3.9), remove it so bootstrap gets a clean clone and install.
-    if [ -d "$INSTALLER_HOME/.electrumx-installer" ] && ! [ -x "$INSTALLER_HOME/.electrumx-installer/venv/bin/electrumx_server" ]; then
-      echo "Removing incomplete $INSTALLER_HOME/.electrumx-installer so installer can run from a clean state."
-      rm -rf "$INSTALLER_HOME/.electrumx-installer"
-    fi
+  if [ "$USE_SYSTEM_PYTHON" = true ]; then
+    # System Python 3.10+ path: venv at /usr/local/electrumx-venv, LevelDB (avoids building python-rocksdb). No Python 3.9.
+    ELECTRUMX_DB_ENGINE="${ELECTRUMX_DB_ENGINE:-leveldb}"
+    echo "[Beacon] Using system Python 3.10+ and venv at $ELECTRUMX_VENV (LevelDB, skips Python 3.9 install)."
     apt-get update -y
     set +e
-    apt-get install -y git python3-pip gcc g++ build-essential \
-      libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev librocksdb-dev
+    apt-get install -y git python3-venv python3-pip gcc g++ build-essential \
+      libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev libleveldb-dev
     apt_ret=$?
     set -e
     if [ $apt_ret -ne 0 ]; then
-      echo "apt-get install had errors (exit $apt_ret). Trying optional packages separately..."
-      apt-get install -y librocksdb-dev 2>/dev/null || true
+      apt-get install -y libleveldb-dev 2>/dev/null || true
     fi
-    if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
-      echo "Found existing $INSTALLER_HOME/.electrumx-installer; running its install.sh ..."
-      rm -f /usr/local/bin/python3.9
-      set +e
-      "$INSTALLER_HOME/.electrumx-installer/install.sh"
-      install_ret=$?
-      set -e
-      if [ $install_ret -eq 0 ] && command -v electrumx_server &>/dev/null; then
-        echo "ElectrumX installed from existing installer."
-      fi
+    if [ ! -d /root/electrumx-src ]; then
+      git clone --depth 1 "$ELECTRUMX_GIT_URL" /root/electrumx-src
+    elif [ "$REINSTALL_ELECTRUMX" = "1" ]; then
+      (cd /root/electrumx-src && git pull --rebase 2>/dev/null) || true
     fi
-    if ! command -v electrumx_server &>/dev/null; then
-      if [ ! -d /root/electrumx-installer ]; then
-        git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
-      fi
-      rm -f /usr/local/bin/python3.9
+    # Use LevelDB (no RocksDB) to avoid building python-rocksdb from source, which often fails on Python 3.11.
+    if [ ! -d "$ELECTRUMX_VENV" ]; then
+      python3 -m venv "$ELECTRUMX_VENV"
+      "$ELECTRUMX_VENV/bin/pip" install --upgrade pip
+      (cd /root/electrumx-src && "$ELECTRUMX_VENV/bin/pip" install ".[leveldb]") || (cd /root/electrumx-src && "$ELECTRUMX_VENV/bin/pip" install .) || "$ELECTRUMX_VENV/bin/pip" install electrumx
+    elif [ "$REINSTALL_ELECTRUMX" = "1" ]; then
+      (cd /root/electrumx-src && "$ELECTRUMX_VENV/bin/pip" install -U ".[leveldb]" 2>/dev/null) || (cd /root/electrumx-src && "$ELECTRUMX_VENV/bin/pip" install -U . 2>/dev/null) || true
+    fi
+    COINS_PY="$("$ELECTRUMX_VENV/bin/python3" -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
+  else
+    ELECTRUMX_DB_ENGINE="${ELECTRUMX_DB_ENGINE:-rocksdb}"
+    # MadCatMining installer path (Python 3.9)
+    if [ "$ALREADY_INSTALLED" = true ] && [ "$REINSTALL_ELECTRUMX" = "1" ]; then
+      echo "Reinstalling/updating ElectrumX (will reset /etc/electrumx.conf and re-apply Lynx patch to coins.py)..."
       set +e
-      (cd /root/electrumx-installer && ./bootstrap.sh)
-      bootstrap_ret=$?
+      if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
+        "$INSTALLER_HOME/.electrumx-installer/install.sh" --update 2>/dev/null || "$INSTALLER_HOME/.electrumx-installer/install.sh"
+      elif [ -d /root/electrumx-installer ]; then
+        (cd /root/electrumx-installer && ./bootstrap.sh --update 2>/dev/null) || (cd /root/electrumx-installer && ./bootstrap.sh)
+      else
+        if [ ! -d /root/electrumx-installer ]; then
+          git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
+        fi
+        (cd /root/electrumx-installer && ./bootstrap.sh --update 2>/dev/null) || (cd /root/electrumx-installer && ./bootstrap.sh)
+      fi
       set -e
-      if [ $bootstrap_ret -ne 0 ]; then
-        echo "ElectrumX bootstrap failed (exit $bootstrap_ret). Check errors above."
+    else
+      echo "Installing ElectrumX via https://github.com/MadCatMining/electrumx-installer ..."
+      if [ -e /usr/local/bin/python3.9 ]; then
+        echo "[Beacon] Removing existing /usr/local/bin/python3.9 so installer can install Python 3.9."
+        rm -f /usr/local/bin/python3.9
+      fi
+      if [ -d "$INSTALLER_HOME/.electrumx-installer" ] && ! [ -x "$INSTALLER_HOME/.electrumx-installer/venv/bin/electrumx_server" ]; then
+        echo "[Beacon] Removing incomplete $INSTALLER_HOME/.electrumx-installer so installer can run from a clean state."
+        rm -rf "$INSTALLER_HOME/.electrumx-installer"
+      fi
+      echo "[Beacon] Pre-flight: /usr/local/bin/python3.9 present? $( [ -e /usr/local/bin/python3.9 ] && echo 'YES - fix with: sudo rm -f /usr/local/bin/python3.9' || echo 'no (ok)' )"
+      apt-get update -y
+      set +e
+      apt-get install -y git python3-pip gcc g++ build-essential \
+        libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev librocksdb-dev
+      apt_ret=$?
+      set -e
+      if [ $apt_ret -ne 0 ]; then
+        apt-get install -y librocksdb-dev 2>/dev/null || true
+      fi
+      if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
+        echo "Found existing $INSTALLER_HOME/.electrumx-installer; running its install.sh ..."
+        rm -f /usr/local/bin/python3.9
+        set +e
+        "$INSTALLER_HOME/.electrumx-installer/install.sh"
+        set -e
+      fi
+      if ! command -v electrumx_server &>/dev/null && ! [ -x "$ELECTRUMX_VENV/bin/electrumx_server" ]; then
+        if [ ! -d /root/electrumx-installer ]; then
+          git clone https://github.com/MadCatMining/electrumx-installer.git /root/electrumx-installer
+        fi
+        rm -f /usr/local/bin/python3.9
+        set +e
+        (cd /root/electrumx-installer && ./bootstrap.sh)
+        set -e
         if [ -x "$INSTALLER_HOME/.electrumx-installer/install.sh" ]; then
-          echo "Running $INSTALLER_HOME/.electrumx-installer/install.sh ..."
           rm -f /usr/local/bin/python3.9
           set +e
           "$INSTALLER_HOME/.electrumx-installer/install.sh"
           set -e
         fi
-        if ! command -v electrumx_server &>/dev/null; then
-          echo "Config will still be written. Install ElectrumX manually if needed."
-        fi
       fi
+    fi
+    COINS_PY="$(python3 -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
+    if [ -z "$COINS_PY" ] && [ -x "$ELECTRUMX_VENV/bin/electrumx_server" ]; then
+      COINS_PY="$("$ELECTRUMX_VENV/bin/python3" -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
     fi
   fi
 
-  # Patch coins.py for Lynx (first install or reinstall; re-apply after update so coins.py is reset then patched)
-  COINS_PY="$(python3 -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
+  # Patch coins.py for Lynx (COINS_PY set above per path; fallback to default python3)
+  if [ -z "$COINS_PY" ]; then
+    COINS_PY="$(python3 -c "import electrumx.lib.coins as m; print(m.__file__.replace('__init__.py','coins.py'))" 2>/dev/null)" || true
+  fi
   if [ -n "$COINS_PY" ] && [ -f "$COINS_PY" ]; then
     if ! grep -q "class Lynx(Coin):" "$COINS_PY"; then
       sed -i '/class Unitus(Coin):/Q' "$COINS_PY" 2>/dev/null || true
@@ -189,7 +232,7 @@ cat > "$ELECTRUMX_CONF" << EOF
 DB_DIRECTORY=/db
 DAEMON_URL=http://${rpcuser}:${rpcpassword}@127.0.0.1:${rpcport}/
 COIN=Lynx
-DB_ENGINE=rocksdb
+DB_ENGINE=${ELECTRUMX_DB_ENGINE:-rocksdb}
 COST_SOFT_LIMIT=0
 COST_HARD_LIMIT=0
 SSL_CERTFILE=${CERT_DIR}/fullchain.pem
@@ -214,10 +257,11 @@ if ! getent passwd electrumx &>/dev/null; then
   useradd -r -s /bin/false -d /db electrumx 2>/dev/null || true
   chown electrumx:electrumx /db 2>/dev/null || true
 fi
+if [ -d "$ELECTRUMX_VENV" ]; then
+  chown -R electrumx:electrumx "$ELECTRUMX_VENV"
+fi
 
-# Resolve electrumx_server / electrumx_rpc from MadCatMining installer only (Python 3.9).
-# Never use /opt/electrumx (old PyPI/Python 3.11 venv) - causes ModuleNotFoundError e.g. electrumx.lib.tx_dash.
-# Reject any path that resolves (including symlinks) to under /opt/electrumx.
+# Resolve electrumx_server / electrumx_rpc: prefer system-Python venv, then MadCatMining; never /opt/electrumx.
 _reject_opt_electrumx() {
   local p="$1"
   [ -z "$p" ] && return 1
@@ -226,7 +270,7 @@ _reject_opt_electrumx() {
   case "$r" in /opt/electrumx/*) return 1 ;; *) return 0 ;; esac
 }
 ELECTRUMX_SERVER=""
-for cand in /root/.electrumx-installer/venv/bin/electrumx_server /root/electrumx-installer/venv/bin/electrumx_server /usr/local/bin/electrumx_server; do
+for cand in /usr/local/electrumx-venv/bin/electrumx_server /root/.electrumx-installer/venv/bin/electrumx_server /root/electrumx-installer/venv/bin/electrumx_server /usr/local/bin/electrumx_server; do
   if [ -x "$cand" ] && _reject_opt_electrumx "$cand"; then
     ELECTRUMX_SERVER="$cand"
     break
@@ -243,7 +287,7 @@ if [ -z "$ELECTRUMX_SERVER" ] || ! _reject_opt_electrumx "$ELECTRUMX_SERVER"; th
   _reject_opt_electrumx "$ELECTRUMX_SERVER" || ELECTRUMX_SERVER=""
 fi
 ELECTRUMX_RPC=""
-for cand in /root/.electrumx-installer/venv/bin/electrumx_rpc /root/electrumx-installer/venv/bin/electrumx_rpc /usr/local/bin/electrumx_rpc; do
+for cand in /usr/local/electrumx-venv/bin/electrumx_rpc /root/.electrumx-installer/venv/bin/electrumx_rpc /root/electrumx-installer/venv/bin/electrumx_rpc /usr/local/bin/electrumx_rpc; do
   if [ -x "$cand" ] && _reject_opt_electrumx "$cand"; then
     ELECTRUMX_RPC="$cand"
     break
@@ -271,7 +315,7 @@ if [ -z "$ELECTRUMX_SERVER" ] || [ -z "$ELECTRUMX_RPC" ] || ! [ -x "$ELECTRUMX_S
   fi
 fi
 
-# Create or fix systemd unit: always recreate when we just updated ElectrumX, or when unit is missing / ExecStart is broken
+# Create or fix systemd unit: recreate when reinstall, unit missing, ExecStart broken, or unit still points at /opt/electrumx
 NEED_UNIT_WRITE=false
 if [ "$REINSTALL_ELECTRUMX" = "1" ]; then
   NEED_UNIT_WRITE=true
@@ -279,8 +323,12 @@ elif [ ! -f /etc/systemd/system/electrumx.service ]; then
   NEED_UNIT_WRITE=true
 elif [ -x "$ELECTRUMX_SERVER" ]; then
   CURRENT_EXEC="$(grep '^ExecStart=' /etc/systemd/system/electrumx.service 2>/dev/null | sed 's/^ExecStart=//')"
-  if [ -n "$CURRENT_EXEC" ] && [ ! -x "$CURRENT_EXEC" ]; then
-    NEED_UNIT_WRITE=true
+  if [ -n "$CURRENT_EXEC" ]; then
+    if [ ! -x "$CURRENT_EXEC" ]; then
+      NEED_UNIT_WRITE=true
+    elif [[ "$CURRENT_EXEC" == /opt/electrumx/* ]]; then
+      NEED_UNIT_WRITE=true
+    fi
   fi
 fi
 if [ "$NEED_UNIT_WRITE" = true ] && [ -x "$ELECTRUMX_SERVER" ]; then
