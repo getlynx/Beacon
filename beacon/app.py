@@ -1942,7 +1942,9 @@ class Beacon(App):
         scrollbar-gutter: stable;
     }
     #overview-network,
-    #overview-peers {
+    #overview-peers,
+    #electrum-installer-card,
+    #electrum-management-card {
         min-height: 18;
         height: 1fr;
         overflow-x: hidden;
