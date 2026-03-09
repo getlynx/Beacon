@@ -398,7 +398,7 @@ class DaemonStatusCard(VerticalScroll):
         self.add_class(accent_class)
         self._text = Static("... loading", id="daemon-status-text")
         self._electrumx_label = Static("", classes="electrumx-label")
-        self._install_link = Link("[u]i[/u]nstall", url="#", id="electrumx-install-inline")
+        self._install_link = Link("[i]nstall", url="#", id="electrumx-install-inline")
         self._electrumx_row = Container(self._electrumx_label, self._install_link, classes="electrumx-status-row")
         self._electrumx_row.display = False
         self.lines: list[str] = []
@@ -1575,6 +1575,9 @@ class ElectrumXInstallConfirmScreen(ModalScreen[bool]):
     """Modal to confirm ElectrumX installation with educational information."""
 
     CSS = """
+    ElectrumXInstallConfirmScreen {
+        align: center middle;
+    }
     #electrumx-confirm-modal {
         padding: 2;
         width: 60;
@@ -1604,29 +1607,30 @@ class ElectrumXInstallConfirmScreen(ModalScreen[bool]):
     """
 
     def compose(self) -> ComposeResult:
-        with Container(id="electrumx-confirm-modal"):
-            yield Static("Install ElectrumX Server", id="electrumx-confirm-title")
-            yield Static(
-                "[b]What is ElectrumX?[/b]\n"
-                "ElectrumX is a lightweight server that enables SPV (Simplified Payment Verification) "
-                "wallets to interact with the Lynx blockchain. It indexes the blockchain and provides "
-                "a fast, efficient API for wallet queries.\n\n"
-                "[b]Requirements:[/b]\n"
-                "• At least 3 GB of RAM available\n"
-                "• Fully synced Lynx node\n"
-                "• Domain name for SSL certificate (optional but recommended)\n"
-                "• Approximately 2-3 GB additional disk space\n\n"
-                "[b]Installation Process:[/b]\n"
-                "• Downloads and compiles ElectrumX from source\n"
-                "• Creates systemd service for automatic startup\n"
-                "• Configures SSL certificates if domain provided\n"
-                "• Opens required firewall ports (50001 for SSL, 50002 for TCP)\n\n"
-                "[b]Note:[/b] Installation may take 5-10 minutes depending on your system.",
-                id="electrumx-confirm-content"
-            )
-            with Container(id="electrumx-confirm-actions"):
-                yield Button("Cancel", id="electrumx-confirm-cancel", variant="error")
-                yield Button("Proceed with Installation", id="electrumx-confirm-proceed", variant="primary")
+        with CenterMiddle():
+            with Container(id="electrumx-confirm-modal"):
+                yield Static("Install ElectrumX Server", id="electrumx-confirm-title")
+                yield Static(
+                    "[b]What is ElectrumX?[/b]\n"
+                    "ElectrumX is a lightweight server that enables SPV (Simplified Payment Verification) "
+                    "wallets to interact with the Lynx blockchain. It indexes the blockchain and provides "
+                    "a fast, efficient API for wallet queries.\n\n"
+                    "[b]Requirements:[/b]\n"
+                    "• At least 3 GB of RAM available\n"
+                    "• Fully synced Lynx node\n"
+                    "• Domain name for SSL certificate (optional but recommended)\n"
+                    "• Approximately 2-3 GB additional disk space\n\n"
+                    "[b]Installation Process:[/b]\n"
+                    "• Downloads and compiles ElectrumX from source\n"
+                    "• Creates systemd service for automatic startup\n"
+                    "• Configures SSL certificates if domain provided\n"
+                    "• Opens required firewall ports (50001 for SSL, 50002 for TCP)\n\n"
+                    "[b]Note:[/b] Installation may take 5-10 minutes depending on your system.",
+                    id="electrumx-confirm-content"
+                )
+                with Container(id="electrumx-confirm-actions"):
+                    yield Button("Cancel", id="electrumx-confirm-cancel", variant="error")
+                    yield Button("Proceed with Installation", id="electrumx-confirm-proceed", variant="primary")
 
     def on_mount(self) -> None:
         self.query_one("#electrumx-confirm-cancel", Button).focus()
