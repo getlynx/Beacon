@@ -78,6 +78,38 @@ def stop_electrumx() -> tuple[bool, str]:
         return False, str(exc)
 
 
+def get_electrumx_sync_status() -> str:
+    """Return high-level ElectrumX status for Daemon Status card.
+
+    Returns one of:
+        'not_installed' – ElectrumX is not installed
+        'stopped'       – installed but service is not active
+        'syncing'       – service active, still catching up with blocks
+        'running'       – service active and caught up / serving
+    """
+    if not is_electrumx_installed():
+        return "not_installed"
+    status = get_electrumx_status()
+    if status != "active":
+        return "stopped"
+    # Check recent journal lines for sync indicators
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", "electrumx", "-n", "15", "--no-pager", "-o", "cat"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout:
+            tail = result.stdout.lower()
+            # ElectrumX logs "catching up" while syncing, various "syncing" messages
+            if "catching up" in tail or "syncing" in tail or "sync" in tail:
+                return "syncing"
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+    return "running"
+
+
 def get_electrumx_journal_lines(n: int = 30) -> list[str]:
     """Return last n lines from journalctl -u electrumx for display in ElectrumXLogCard.
     Uses -o short-precise so output matches journalctl -f -u electrumx -n N (timestamp + unit + message)."""

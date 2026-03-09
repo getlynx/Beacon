@@ -386,6 +386,45 @@ class HeaderlessCardPanel(CardPanel):
         return "\n".join(self.lines) if self.lines else "... loading"
 
 
+class DaemonStatusCard(VerticalScroll):
+    """Daemon Status card with text lines and an optional inline ElectrumX install button."""
+
+    COL = 18  # label column width, matches daemon_status_lines formatting
+
+    def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = title
+        self.add_class("card")
+        self.add_class(accent_class)
+        self._text = Static("... loading", id="daemon-status-text")
+        self._install_btn = Button("Install", id="electrumx-install-inline")
+        self._install_btn.display = False
+        self.lines: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        yield self._text
+        yield self._install_btn
+
+    def update_lines(self, lines: list[str], electrumx_label: str = "", show_install_btn: bool = False) -> None:
+        """Update daemon status text lines and conditionally show the install button.
+
+        If show_install_btn is True, the ElectrumX Status text line is replaced
+        by the inline Install button.  Otherwise the label text is shown inline.
+        """
+        self.lines = lines
+        if not lines:
+            self._text.update("... loading")
+            self._install_btn.display = False
+            return
+        # Build alternating-colour text
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(lines)
+        ]
+        self._text.update(Group(*texts))
+        self._install_btn.display = show_install_btn
+
+
 class StorageCapabilityPanel(VerticalScroll):
     """Storage card with column layout and alternating row colors."""
 
@@ -2405,6 +2444,7 @@ class Beacon(App):
         self.electrum_management_card.display = False
         self._show_electrum_card = False
         self._is_synced = False
+        self._electrumx_installing = False
         self.overview_peers = PeerListPanel(f"{E('🌐', '*')} Peers", "network", id="overview-peers")
         self.overview_addresses = AddressListPanel(
             f"{E('💼', '>')} Addresses", "wallet", id="overview-addresses"
@@ -2420,7 +2460,7 @@ class Beacon(App):
         self._difficulty_backfill_timer = None
         self.overview_mempool = MemPoolPanel(f"{E('📋', '>')} Memory Pool", "sync", id="overview-mempool")
         self.overview_system = CardPanel(f"{E('💻', '>')} System Utilization", "node", alternating_rows=True, id="overview-system")
-        self.overview_daemon_status = CardPanel(f"{E('🟢', '*')} Daemon Status", "node", alternating_rows=True, id="overview-daemon-status")
+        self.overview_daemon_status = DaemonStatusCard(f"{E('🟢', '*')} Daemon Status", "node", id="overview-daemon-status")
         self.overview_pricing = CardPanel(f"{E('💰', '$')} Pricing", "pricing", alternating_rows=True, id="overview-pricing")
         self.overview_value = CardPanel(f"{E('💵', '$')} Value", "pricing", alternating_rows=True, id="overview-value")
         self.overview_storage = StorageCapabilityPanel(
@@ -3413,6 +3453,10 @@ class Beacon(App):
                 await self._handle_firewall_port(port, enabled)
             except (ValueError, IndexError):
                 pass
+            return
+
+        if btn_id == "electrumx-install-inline":
+            await self._handle_electrum_install()
             return
 
         if btn_id == "electrum-installer-btn":
@@ -4570,6 +4614,21 @@ class Beacon(App):
         daemon_label = self._node_name or "Daemon"
         ibd_status = "Syncing" if data['sync_monitor'] == "active" else "Synced"
         col = 18
+
+        # Determine ElectrumX status for Daemon Status card
+        show_electrumx_install_btn = False
+        if self._electrumx_installing:
+            electrumx_display = "installing…"
+        elif not self._is_synced or mem_total < 3.0:
+            electrumx_display = "unavailable"
+        elif electrumx_service.is_electrumx_installed():
+            ex_sync = electrumx_service.get_electrumx_sync_status()
+            electrumx_display = ex_sync  # running, syncing, stopped
+        else:
+            # Eligible to install — show the button instead of a text label
+            electrumx_display = ""
+            show_electrumx_install_btn = True
+
         daemon_status_lines = [
             f"{daemon_label + ' Uptime':<{col}} {uptime_display}",
             f"{daemon_label + ' Version':<{col}} {daemon_version}",
@@ -4578,8 +4637,14 @@ class Beacon(App):
             f"{'Tenant Status':<{col}} unregistered",
             f"{'Operating System':<{col}} {self._os_name}",
         ]
+        if electrumx_display:
+            daemon_status_lines.append(f"{'ElectrumX Status':<{col}} {electrumx_display}")
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
-        self._schedule_update(0.4, lambda: self.overview_daemon_status.update_lines(daemon_status_lines))
+        self._schedule_update(0.4, lambda: self.overview_daemon_status.update_lines(
+            daemon_status_lines,
+            electrumx_label=electrumx_display,
+            show_install_btn=show_electrumx_install_btn,
+        ))
         self._schedule_update(0.5, lambda: self.overview_pricing.update_lines(pricing_lines))
         self._schedule_update(0.5, lambda: self.overview_value.update_lines(value_lines))
         self._schedule_update(0.6, self.refresh_storage_capacity)
