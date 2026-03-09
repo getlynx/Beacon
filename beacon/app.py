@@ -396,43 +396,50 @@ class DaemonStatusCard(VerticalScroll):
         self.border_title = title
         self.add_class("card")
         self.add_class(accent_class)
-        self._container = Container(id="daemon-status-container")
+        self._text = Static("... loading", id="daemon-status-text")
+        self._electrumx_label = Static("", classes="electrumx-label")
+        self._install_link = Link("Install", url="#", id="electrumx-install-inline")
+        self._electrumx_row = Container(self._electrumx_label, self._install_link, classes="electrumx-status-row")
+        self._electrumx_row.display = False
         self.lines: list[str] = []
 
     def compose(self) -> ComposeResult:
-        yield self._container
+        yield self._text
+        yield self._electrumx_row
 
     def update_lines(self, lines: list[str], electrumx_label: str = "", show_install_btn: bool = False) -> None:
         """Update daemon status text lines with ElectrumX status.
 
-        If show_install_btn is True, adds an ElectrumX Status line with an Install link.
-        Otherwise shows the electrumx_label as plain text.
+        If show_install_btn is True, shows the ElectrumX Status line with an Install link.
+        Otherwise shows the electrumx_label as plain text inline with other lines.
         """
         self.lines = lines
-        self._container.remove_children()
 
         if not lines:
-            self._container.mount(Static("... loading"))
+            self._text.update("... loading")
+            self._electrumx_row.display = False
             return
 
-        # Build text lines with alternating colors
-        for i, line in enumerate(lines):
-            text_widget = Static(Text(line, style="dim" if i % 2 == 1 else ""))
-            self._container.mount(text_widget)
+        # Build all text lines including ElectrumX status if not showing button
+        all_lines = lines.copy()
 
-        # Add ElectrumX Status line
         if show_install_btn:
-            # Create a horizontal container for the label and link
-            row = Container(classes="electrumx-status-row")
-            label = Static(f"{'ElectrumX Status':<{self.COL}} ", classes="electrumx-label")
-            link = Link("Install", url="#", id="electrumx-install-inline")
-            row.mount(label, link)
-            self._container.mount(row)
-        elif electrumx_label:
-            # Add as regular text line
-            line = f"{'ElectrumX Status':<{self.COL}} {electrumx_label}"
-            text_widget = Static(Text(line, style="dim" if len(lines) % 2 == 0 else ""))
-            self._container.mount(text_widget)
+            # Show the separate row with link
+            self._electrumx_label.update(f"{'ElectrumX Status':<{self.COL}} ")
+            self._electrumx_row.display = True
+        else:
+            # Hide the row
+            self._electrumx_row.display = False
+            # Add ElectrumX status to regular lines if label provided
+            if electrumx_label:
+                all_lines.append(f"{'ElectrumX Status':<{self.COL}} {electrumx_label}")
+
+        # Build alternating-colour text for all lines
+        texts = [
+            Text(line, style="dim" if i % 2 == 1 else "")
+            for i, line in enumerate(all_lines)
+        ]
+        self._text.update(Group(*texts))
 
 
 class StorageCapabilityPanel(VerticalScroll):
