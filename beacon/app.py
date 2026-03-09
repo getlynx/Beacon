@@ -398,7 +398,7 @@ class DaemonStatusCard(VerticalScroll):
         self.add_class(accent_class)
         self._text = Static("... loading", id="daemon-status-text")
         self._electrumx_label = Static("", classes="electrumx-label")
-        self._install_link = Link("Install", url="#", id="electrumx-install-inline")
+        self._install_link = Link("[u]i[/u]nstall", url="#", id="electrumx-install-inline")
         self._electrumx_row = Container(self._electrumx_label, self._install_link, classes="electrumx-status-row")
         self._electrumx_row.display = False
         self.lines: list[str] = []
@@ -1569,6 +1569,73 @@ class WalletPasswordScreen(ModalScreen[tuple[str, int | None, str | None]]):
                 duration_selected = dur_sel.selected
                 duration = int(duration_selected[0]) if duration_selected else WALLET_UNLOCK_DURATIONS[0][1]
                 self.dismiss((pwd, duration, purpose))
+
+
+class ElectrumXInstallConfirmScreen(ModalScreen[bool]):
+    """Modal to confirm ElectrumX installation with educational information."""
+
+    CSS = """
+    #electrumx-confirm-modal {
+        padding: 2;
+        width: 60;
+        height: auto;
+        border: solid $primary;
+        background: $surface;
+    }
+    #electrumx-confirm-title {
+        text-align: center;
+        color: $primary;
+        text-style: bold;
+        padding-bottom: 1;
+    }
+    #electrumx-confirm-content {
+        padding: 1 0;
+        height: auto;
+    }
+    #electrumx-confirm-actions {
+        layout: horizontal;
+        height: auto;
+        padding-top: 2;
+        align: center middle;
+    }
+    #electrumx-confirm-actions Button {
+        margin: 0 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Container(id="electrumx-confirm-modal"):
+            yield Static("Install ElectrumX Server", id="electrumx-confirm-title")
+            yield Static(
+                "[b]What is ElectrumX?[/b]\n"
+                "ElectrumX is a lightweight server that enables SPV (Simplified Payment Verification) "
+                "wallets to interact with the Lynx blockchain. It indexes the blockchain and provides "
+                "a fast, efficient API for wallet queries.\n\n"
+                "[b]Requirements:[/b]\n"
+                "• At least 3 GB of RAM available\n"
+                "• Fully synced Lynx node\n"
+                "• Domain name for SSL certificate (optional but recommended)\n"
+                "• Approximately 2-3 GB additional disk space\n\n"
+                "[b]Installation Process:[/b]\n"
+                "• Downloads and compiles ElectrumX from source\n"
+                "• Creates systemd service for automatic startup\n"
+                "• Configures SSL certificates if domain provided\n"
+                "• Opens required firewall ports (50001 for SSL, 50002 for TCP)\n\n"
+                "[b]Note:[/b] Installation may take 5-10 minutes depending on your system.",
+                id="electrumx-confirm-content"
+            )
+            with Container(id="electrumx-confirm-actions"):
+                yield Button("Cancel", id="electrumx-confirm-cancel", variant="error")
+                yield Button("Proceed with Installation", id="electrumx-confirm-proceed", variant="primary")
+
+    def on_mount(self) -> None:
+        self.query_one("#electrumx-confirm-cancel", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "electrumx-confirm-cancel":
+            self.dismiss(False)
+        elif event.button.id == "electrumx-confirm-proceed":
+            self.dismiss(True)
 
 
 class ElectrumXDomainScreen(ModalScreen[str | None]):
@@ -3576,6 +3643,18 @@ class Beacon(App):
                 await self._handle_electrum_install()
                 return
 
+    async def on_key(self, event: events.Key) -> None:
+        """Handle key presses for hidden hotkeys."""
+        # Handle 'i' key for ElectrumX installation when the install link is visible
+        if event.key == "i" and not self._show_electrum_card:
+            # Check if the install link is currently visible (via its container)
+            if hasattr(self, 'overview_daemon_status'):
+                electrumx_row = self.overview_daemon_status._electrumx_row
+                if electrumx_row.display:
+                    event.stop()
+                    await self._handle_electrum_install()
+                    return
+
     def _init_backup_card(self) -> None:
         """Initialize backup card state."""
         self.backup_card.refresh_state()
@@ -3772,11 +3851,28 @@ class Beacon(App):
         self.electrum_management_card.refresh_state()
 
     async def _handle_electrum_install(self, reinstall: bool = False) -> None:
-        """Prompt for ElectrumX domain then run install script. If reinstall=True, sets REINSTALL_ELECTRUMX=1."""
-        self.push_screen(
-            ElectrumXDomainScreen(),
-            lambda domain: self._on_electrum_domain_entered(domain, reinstall),
-        )
+        """Show confirmation screen, then prompt for domain, then run install script."""
+        if not reinstall:
+            # Show confirmation screen first for new installations
+            self.push_screen(
+                ElectrumXInstallConfirmScreen(),
+                lambda confirmed: self._on_electrum_install_confirmed(confirmed, reinstall),
+            )
+        else:
+            # For reinstalls, skip confirmation and go straight to domain prompt
+            self.push_screen(
+                ElectrumXDomainScreen(),
+                lambda domain: self._on_electrum_domain_entered(domain, reinstall),
+            )
+
+    def _on_electrum_install_confirmed(self, confirmed: bool, reinstall: bool) -> None:
+        """Handle confirmation screen result."""
+        if confirmed:
+            # User confirmed, now ask for domain
+            self.push_screen(
+                ElectrumXDomainScreen(),
+                lambda domain: self._on_electrum_domain_entered(domain, reinstall),
+            )
 
     def _on_electrum_domain_entered(self, domain: str | None, reinstall: bool) -> None:
         """Schedule install script after domain screen (sync callback)."""
