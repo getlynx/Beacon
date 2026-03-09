@@ -18,7 +18,7 @@ from textual.screen import ModalScreen
 from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
 from textual.strip import Strip
-from textual.widgets import Button, Footer, Input, SelectionList, Sparkline, Static, TabbedContent, TabPane
+from textual.widgets import Button, Footer, Input, Link, SelectionList, Sparkline, Static, TabbedContent, TabPane
 from rich.console import Group
 from rich.style import Style
 from rich.text import Text
@@ -397,24 +397,24 @@ class DaemonStatusCard(VerticalScroll):
         self.add_class("card")
         self.add_class(accent_class)
         self._text = Static("... loading", id="daemon-status-text")
-        self._install_btn = Button("Install", id="electrumx-install-inline")
-        self._install_btn.display = False
+        self._install_link = Link("Install ElectrumX", url="#", id="electrumx-install-inline")
+        self._install_link.display = False
         self.lines: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield self._text
-        yield self._install_btn
+        yield self._install_link
 
     def update_lines(self, lines: list[str], electrumx_label: str = "", show_install_btn: bool = False) -> None:
-        """Update daemon status text lines and conditionally show the install button.
+        """Update daemon status text lines and conditionally show the install link.
 
         If show_install_btn is True, the ElectrumX Status text line is replaced
-        by the inline Install button.  Otherwise the label text is shown inline.
+        by the inline Install link.  Otherwise the label text is shown inline.
         """
         self.lines = lines
         if not lines:
             self._text.update("... loading")
-            self._install_btn.display = False
+            self._install_link.display = False
             return
         # Build alternating-colour text
         texts = [
@@ -422,7 +422,7 @@ class DaemonStatusCard(VerticalScroll):
             for i, line in enumerate(lines)
         ]
         self._text.update(Group(*texts))
-        self._install_btn.display = show_install_btn
+        self._install_link.display = show_install_btn
 
 
 class StorageCapabilityPanel(VerticalScroll):
@@ -2273,6 +2273,20 @@ class Beacon(App):
     #wallet-password-actions Button {
         margin-right: 1;
     }
+    #electrumx-install-inline {
+        text-style: underline;
+        color: $accent-lighten-2;
+        margin-top: 1;
+        padding: 0 1;
+        text-align: left;
+    }
+    #electrumx-install-inline:hover {
+        color: $accent-lighten-3;
+        background: $surface 10%;
+    }
+    #electrumx-install-inline:focus {
+        text-style: bold underline;
+    }
     #firewall-status-line {
         padding-left: 1;
         height: auto;
@@ -3520,6 +3534,17 @@ class Beacon(App):
             time.tzset()
             # Refresh displays to show new timezone
             await self.refresh_timezone()
+
+    async def on_click(self, event: events.Click) -> None:
+        """Handle clicks on Link widgets."""
+        # Check if the click is on a Link widget
+        if isinstance(event.widget, Link):
+            link_id = event.widget.id or ""
+
+            if link_id == "electrumx-install-inline":
+                event.stop()  # Prevent the link from trying to open a URL
+                await self._handle_electrum_install()
+                return
 
     def _init_backup_card(self) -> None:
         """Initialize backup card state."""
