@@ -387,7 +387,7 @@ class HeaderlessCardPanel(CardPanel):
 
 
 class DaemonStatusCard(VerticalScroll):
-    """Daemon Status card with text lines and an optional inline ElectrumX install button."""
+    """Daemon Status card with text lines and an inline ElectrumX install link."""
 
     COL = 18  # label column width, matches daemon_status_lines formatting
 
@@ -396,33 +396,43 @@ class DaemonStatusCard(VerticalScroll):
         self.border_title = title
         self.add_class("card")
         self.add_class(accent_class)
-        self._text = Static("... loading", id="daemon-status-text")
-        self._install_link = Link("Install ElectrumX", url="#", id="electrumx-install-inline")
-        self._install_link.display = False
+        self._container = Container(id="daemon-status-container")
         self.lines: list[str] = []
 
     def compose(self) -> ComposeResult:
-        yield self._text
-        yield self._install_link
+        yield self._container
 
     def update_lines(self, lines: list[str], electrumx_label: str = "", show_install_btn: bool = False) -> None:
-        """Update daemon status text lines and conditionally show the install link.
+        """Update daemon status text lines with ElectrumX status.
 
-        If show_install_btn is True, the ElectrumX Status text line is replaced
-        by the inline Install link.  Otherwise the label text is shown inline.
+        If show_install_btn is True, adds an ElectrumX Status line with an Install link.
+        Otherwise shows the electrumx_label as plain text.
         """
         self.lines = lines
+        self._container.remove_children()
+
         if not lines:
-            self._text.update("... loading")
-            self._install_link.display = False
+            self._container.mount(Static("... loading"))
             return
-        # Build alternating-colour text
-        texts = [
-            Text(line, style="dim" if i % 2 == 1 else "")
-            for i, line in enumerate(lines)
-        ]
-        self._text.update(Group(*texts))
-        self._install_link.display = show_install_btn
+
+        # Build text lines with alternating colors
+        for i, line in enumerate(lines):
+            text_widget = Static(Text(line, style="dim" if i % 2 == 1 else ""))
+            self._container.mount(text_widget)
+
+        # Add ElectrumX Status line
+        if show_install_btn:
+            # Create a horizontal container for the label and link
+            row = Container(classes="electrumx-status-row")
+            label = Static(f"{'ElectrumX Status':<{self.COL}} ", classes="electrumx-label")
+            link = Link("Install", url="#", id="electrumx-install-inline")
+            row.mount(label, link)
+            self._container.mount(row)
+        elif electrumx_label:
+            # Add as regular text line
+            line = f"{'ElectrumX Status':<{self.COL}} {electrumx_label}"
+            text_widget = Static(Text(line, style="dim" if len(lines) % 2 == 0 else ""))
+            self._container.mount(text_widget)
 
 
 class StorageCapabilityPanel(VerticalScroll):
@@ -2273,12 +2283,25 @@ class Beacon(App):
     #wallet-password-actions Button {
         margin-right: 1;
     }
+    #daemon-status-container {
+        layout: vertical;
+        width: 100%;
+        height: auto;
+    }
+    .electrumx-status-row {
+        layout: horizontal;
+        width: 100%;
+        height: auto;
+    }
+    .electrumx-label {
+        width: auto;
+        height: auto;
+    }
     #electrumx-install-inline {
         text-style: underline;
         color: $accent-lighten-2;
-        margin-top: 1;
-        padding: 0 1;
-        text-align: left;
+        width: auto;
+        height: auto;
     }
     #electrumx-install-inline:hover {
         color: $accent-lighten-3;
@@ -4662,8 +4685,7 @@ class Beacon(App):
             f"{'Tenant Status':<{col}} unregistered",
             f"{'Operating System':<{col}} {self._os_name}",
         ]
-        if electrumx_display:
-            daemon_status_lines.append(f"{'ElectrumX Status':<{col}} {electrumx_display}")
+        # Don't add ElectrumX line here - it's handled in update_lines method
         self._schedule_update(0.4, lambda: self.overview_system.update_lines(system_overview_lines))
         self._schedule_update(0.4, lambda: self.overview_daemon_status.update_lines(
             daemon_status_lines,
@@ -5062,20 +5084,17 @@ class Beacon(App):
             self.refresh_bindings()
 
     def _sync_electrum_binding(self) -> None:
-        """Show or hide the 'i' key for ElectrumX card based on RAM, sync, and install state."""
+        """Show or hide the 'i' key for ElectrumX card based on whether it's installed."""
         if self._map_fullscreen_active:
             if "i" in self._bindings.key_to_bindings:
                 self._bindings.key_to_bindings.pop("i", None)
             self.refresh_bindings()
             return
         installed = electrumx_service.is_electrumx_installed()
-        stats = self.system.get_system_stats()
-        ram_gb = stats.get("memory_total_gb") or 0.0
-        eligible = ram_gb >= 3.0 and self._is_synced
-        show_i = (eligible and not installed) or installed
         has_binding = "i" in self._bindings.key_to_bindings
-        if show_i:
-            label = "ElectrumX" if installed else "ElectrumX Install"
+        # Only show the 'i' binding when ElectrumX is installed
+        if installed:
+            label = "ElectrumX"
             if has_binding:
                 bindings_list = self._bindings.key_to_bindings.get("i")
                 if bindings_list:
