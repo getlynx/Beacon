@@ -1926,12 +1926,14 @@ class ElectrumXManagementCard(VerticalScroll):
         self._stop_btn = Button("Stop", id="electrum-management-stop")
         self._start_btn = Button("Start", id="electrum-management-start")
         self._reinstall_btn = Button("Reinstall / Update", id="electrum-management-reinstall")
+        self._log_hint = Static("Press [bold]j[/bold] to view ElectrumX log", id="electrum-management-log-hint")
 
     def compose(self) -> ComposeResult:
         yield self._conf_path
         yield self._stop_btn
         yield self._start_btn
         yield self._reinstall_btn
+        yield self._log_hint
 
     def refresh_state(self) -> None:
         """Update conf path and button states from electrumx service."""
@@ -2078,6 +2080,11 @@ class Beacon(App):
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
         overflow-y: scroll;
+    }
+    #electrum-management-log-hint {
+        margin-top: 1;
+        color: $text-muted;
+        text-align: center;
     }
     #overview-node-status {
         height: 9;
@@ -3659,6 +3666,12 @@ class Beacon(App):
                     await self._handle_electrum_install()
                     return
 
+        # Handle 'j' key for ElectrumX log when Management card is visible
+        if event.key == "j" and self._show_electrum_card and self.electrum_management_card.display:
+            event.stop()
+            self.action_toggle_electrumx_log_card()
+            return
+
     def _init_backup_card(self) -> None:
         """Initialize backup card state."""
         self.backup_card.refresh_state()
@@ -5225,20 +5238,10 @@ class Beacon(App):
         self.refresh_bindings()
 
     def _sync_electrumx_log_binding(self) -> None:
-        """Show or hide the 'j' key (ElectrumX log) in the footer; only when ElectrumX is installed."""
-        if self._map_fullscreen_active:
-            if "j" in self._bindings.key_to_bindings:
-                self._bindings.key_to_bindings.pop("j", None)
-            self.refresh_bindings()
-            return
-        show_j = electrumx_service.is_electrumx_installed()
-        has_binding = "j" in self._bindings.key_to_bindings
-        if show_j:
-            if not has_binding:
-                self.bind("j", "toggle_electrumx_log_card", description="ElectrumX Log")
-        elif has_binding:
+        """Remove the 'j' key from global bindings - it's now only available in ElectrumX Management card."""
+        if "j" in self._bindings.key_to_bindings:
             self._bindings.key_to_bindings.pop("j", None)
-        self.refresh_bindings()
+            self.refresh_bindings()
 
     def _schedule_send_sweep_reset_if_hidden(self) -> None:
         """If Send/Sweep hotkeys would be hidden and a card is visible, reset to difficulty chart in 5s."""
