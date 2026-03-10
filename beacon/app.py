@@ -284,7 +284,7 @@ class CustomHeader(Static):
         """Update the clock display."""
         now = datetime.now()
         # Add [z] between date and time to indicate timezone hotkey
-        date_str = now.strftime("%A, %B %d, %Y")
+        date_str = now.strftime("%B %d")  # Shortened date format to save space
         time_str = now.strftime("%I:%M:%S %p")
         full_time_str = f"{date_str} [z] {time_str}"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
