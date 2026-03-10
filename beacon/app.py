@@ -586,6 +586,8 @@ class ElectrumXLogCard(VerticalScroll):
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
         self.add_class("network")
+        self.styles.overflow_y = "scroll"
+        self.styles.height = "100%"
         self._content = Static("... loading", classes="network-row-text")
 
     def compose(self) -> ComposeResult:
@@ -2053,9 +2055,11 @@ class Beacon(App):
         min-width: 0;
         min-height: 0;
     }
-    #debug-log-card {
+    #debug-log-card,
+    #electrumx-log-card {
         width: 100%;
         height: 100%;
+        max-height: 100%;
         min-height: 6;
         overflow-y: scroll;
         scrollbar-visibility: visible;
