@@ -283,7 +283,8 @@ class CustomHeader(Static):
     def update_clock(self) -> None:
         """Update the clock display."""
         now = datetime.now()
-        date_str = now.strftime("%A, %B %d, %Y")
+        # Shorter date format to make room for [z]
+        date_str = now.strftime("%a, %b %d, %Y")  # Mon, Mar 10, 2026 instead of Monday, March 10, 2026
         # Use %-I to remove leading zero from hour (Linux/Unix)
         time_str = now.strftime("%-I:%M:%S %p")
         # Include [z] directly in the string that will definitely be displayed
