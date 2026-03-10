@@ -399,18 +399,23 @@ class DaemonStatusCard(VerticalScroll):
         self._text = Static("... loading", id="daemon-status-text")
         self._electrumx_label = Static("", classes="electrumx-label")
         self._install_link = Link("[i]nstall", url="#", id="electrumx-install-inline")
+        self._running_link = Link("runn[i]ng", url="#", id="electrumx-running-inline")
         self._electrumx_row = Container(self._electrumx_label, self._install_link, classes="electrumx-status-row")
+        self._electrumx_running_row = Container(self._electrumx_label, self._running_link, classes="electrumx-status-row")
         self._electrumx_row.display = False
+        self._electrumx_running_row.display = False
         self.lines: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield self._text
         yield self._electrumx_row
+        yield self._electrumx_running_row
 
     def update_lines(self, lines: list[str], electrumx_label: str = "", show_install_btn: bool = False) -> None:
         """Update daemon status text lines with ElectrumX status.
 
         If show_install_btn is True, shows the ElectrumX Status line with an Install link.
+        If electrumx_label is "running", shows the ElectrumX Status line with a clickable runn[i]ng link.
         Otherwise shows the electrumx_label as plain text inline with other lines.
         """
         self.lines = lines
@@ -418,18 +423,26 @@ class DaemonStatusCard(VerticalScroll):
         if not lines:
             self._text.update("... loading")
             self._electrumx_row.display = False
+            self._electrumx_running_row.display = False
             return
 
         # Build all text lines including ElectrumX status if not showing button
         all_lines = lines.copy()
 
         if show_install_btn:
-            # Show the separate row with link
+            # Show the install link row
             self._electrumx_label.update(f"{'ElectrumX Status':<{self.COL}} ")
             self._electrumx_row.display = True
-        else:
-            # Hide the row
+            self._electrumx_running_row.display = False
+        elif electrumx_label == "running":
+            # Show the running link row with [i] hotkey
+            self._electrumx_label.update(f"{'ElectrumX Status':<{self.COL}} ")
             self._electrumx_row.display = False
+            self._electrumx_running_row.display = True
+        else:
+            # Hide both rows
+            self._electrumx_row.display = False
+            self._electrumx_running_row.display = False
             # Add ElectrumX status to regular lines if label provided
             if electrumx_label:
                 all_lines.append(f"{'ElectrumX Status':<{self.COL}} {electrumx_label}")
@@ -3647,14 +3660,20 @@ class Beacon(App):
                 await self._handle_electrum_install()
                 return
 
+            if link_id == "electrumx-running-inline":
+                event.stop()  # Prevent the link from trying to open a URL
+                await self._handle_electrum_install()
+                return
+
     async def on_key(self, event: events.Key) -> None:
         """Handle key presses for hidden hotkeys."""
-        # Handle 'i' key for ElectrumX installation when the install link is visible
+        # Handle 'i' key for ElectrumX installation when either the install or running link is visible
         if event.key == "i" and not self._show_electrum_card:
-            # Check if the install link is currently visible (via its container)
+            # Check if either the install link or running link is currently visible
             if hasattr(self, 'overview_daemon_status'):
-                electrumx_row = self.overview_daemon_status._electrumx_row
-                if electrumx_row.display:
+                install_row = self.overview_daemon_status._electrumx_row
+                running_row = self.overview_daemon_status._electrumx_running_row
+                if install_row.display or running_row.display:
                     event.stop()
                     await self._handle_electrum_install()
                     return
