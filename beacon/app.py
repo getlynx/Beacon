@@ -2532,6 +2532,7 @@ class Beacon(App):
         self._timezone_card_auto_hide_timer = None
         self._map_fullscreen_timer = None
         self._map_fullscreen_render_timer = None
+        self._electrum_management_auto_close_timer = None
         self._pending_peer_map_update = None
         self._map_fullscreen_active = False
         self._snow_effect_active = False
@@ -2600,6 +2601,9 @@ class Beacon(App):
         self._peer_location_revert_timer: object = None
         self._debug_log_revert_timer: object = None
         self._debug_log_revert_at: float | None = None
+        self._electrum_management_close_at: float | None = None
+        self._electrumx_log_revert_timer: object = None
+        self._electrumx_log_revert_at: float | None = None
         self.geo_cache = GeoCache()
 
         self.block_stats_card = BlockStatsPanel(
@@ -2920,6 +2924,7 @@ class Beacon(App):
         self._sync_electrumx_log_binding()
         self._set_debug_log_card_visible(self._show_debug_log_card)
         self.set_interval(1.0, self._update_debug_log_countdown)
+        self.set_interval(1.0, self._update_electrum_countdowns)
 
     def _loading_message(self) -> str:
         name = self._node_name or "Blockchain"
@@ -3149,6 +3154,8 @@ class Beacon(App):
 
     DEBUG_LOG_REVERT_SECONDS = 300  # 5 minutes: always revert to Peer Map
     PEER_LOCATION_REVERT_SECONDS = 300  # 5 minutes: revert from IP view to city/state
+    ELECTRUMX_LOG_REVERT_SECONDS = 300  # 5 minutes: revert to Peer Map
+    ELECTRUM_MANAGEMENT_CLOSE_SECONDS = 60  # 1 minute: auto-close Management card
 
     def _revert_debug_log_to_peer_map(self) -> None:
         """Called by timer: switch from Debug Log back to Peer Map after 5 minutes."""
@@ -3170,6 +3177,26 @@ class Beacon(App):
         mins = int(remaining) // 60
         secs = int(remaining) % 60
         self.debug_log_card.border_subtitle = f"Reverts to Peer Map in {mins}:{secs:02d}"
+
+    def _update_electrum_countdowns(self) -> None:
+        """Update ElectrumX Management and Log card subtitles with countdowns (runs every 1s)."""
+        # Update ElectrumX Management card countdown
+        if self._show_electrum_card and self.electrum_management_card.display and self._electrum_management_close_at is not None:
+            remaining = max(0.0, self._electrum_management_close_at - time.monotonic())
+            mins = int(remaining) // 60
+            secs = int(remaining) % 60
+            self.electrum_management_card.border_subtitle = f"Auto-closes in {mins}:{secs:02d}"
+        elif self.electrum_management_card.display:
+            self.electrum_management_card.border_subtitle = ""
+
+        # Update ElectrumX Log card countdown
+        if self._show_electrumx_log_card and self._electrumx_log_revert_at is not None:
+            remaining = max(0.0, self._electrumx_log_revert_at - time.monotonic())
+            mins = int(remaining) // 60
+            secs = int(remaining) % 60
+            self.electrumx_log_card.border_subtitle = f"Reverts to Peer Map in {mins}:{secs:02d}"
+        elif not self._show_electrumx_log_card:
+            self.electrumx_log_card.border_subtitle = "journalctl -u electrumx -n 30"
 
     def _sync_debug_log_binding(self) -> None:
         """Ensure 'l' (Debug Log) is in the footer when not fullscreen; restore if missing."""
@@ -3233,11 +3260,18 @@ class Beacon(App):
     def action_toggle_electrumx_log_card(self) -> None:
         """Toggle between Peer Map and ElectrumX log in map_log_slot (bound to j, only when ElectrumX installed)."""
         if self._show_electrumx_log_card:
+            # Closing ElectrumX log
             self._show_electrumx_log_card = False
+            self._electrumx_log_revert_at = None
+            if self._electrumx_log_revert_timer:
+                self._electrumx_log_revert_timer.stop()
+                self._electrumx_log_revert_timer = None
             self.peer_map.display = True
             self.debug_log_card.display = self._show_debug_log_card
             self.electrumx_log_card.display = False
+            self.electrumx_log_card.border_subtitle = "journalctl -u electrumx -n 30"
         else:
+            # Opening ElectrumX log
             if self._debug_log_revert_timer:
                 self._debug_log_revert_timer.stop()
                 self._debug_log_revert_timer = None
@@ -3249,27 +3283,77 @@ class Beacon(App):
             self.electrumx_log_card.display = True
             self.electrumx_log_card._scroll_to_bottom_on_next_refresh = True
             self.electrumx_log_card._refresh_lines()
+            # Start 5-minute timer to revert to Peer Map
+            self._electrumx_log_revert_at = time.monotonic() + self.ELECTRUMX_LOG_REVERT_SECONDS
+            if self._electrumx_log_revert_timer:
+                self._electrumx_log_revert_timer.stop()
+            self._electrumx_log_revert_timer = self.set_timer(
+                self.ELECTRUMX_LOG_REVERT_SECONDS, self._revert_electrumx_log_to_peer_map
+            )
 
     def action_toggle_electrum_card(self) -> None:
         """Toggle between Network Activity and ElectrumX Installer or Management card (bound to i)."""
         if self._show_electrum_card:
+            # Closing the ElectrumX card - cancel any auto-close timer
+            if self._electrum_management_auto_close_timer:
+                self._electrum_management_auto_close_timer.stop()
+                self._electrum_management_auto_close_timer = None
+            self._electrum_management_close_at = None
             self._show_electrum_card = False
             self.overview_network.display = True
             self.electrum_installer_card.display = False
             self.electrum_management_card.display = False
         else:
+            # Opening the ElectrumX card
             self._show_electrum_card = True
             self.overview_network.display = False
             if electrumx_service.is_electrumx_installed():
                 self.electrum_installer_card.display = False
                 self.electrum_management_card.display = True
                 self.electrum_management_card.refresh_state()
+                # Start auto-close timer for Management card (1 minute)
+                if self._electrum_management_auto_close_timer:
+                    self._electrum_management_auto_close_timer.stop()
+                self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
+                self._electrum_management_auto_close_timer = self.set_timer(
+                    self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
+                )
             else:
                 self.electrum_installer_card.display = True
                 self.electrum_management_card.display = False
                 stats = self.system.get_system_stats()
                 ram_gb = stats.get("memory_total_gb") or 0.0
                 self.electrum_installer_card.refresh_content(ram_gb)
+
+    def _revert_electrumx_log_to_peer_map(self) -> None:
+        """Called by timer: switch from ElectrumX Log back to Peer Map after 5 minutes."""
+        self._electrumx_log_revert_timer = None
+        self._electrumx_log_revert_at = None
+        if self._show_electrumx_log_card:
+            self._show_electrumx_log_card = False
+            self.electrumx_log_card.display = False
+            self.electrumx_log_card.border_subtitle = "journalctl -u electrumx -n 30"
+            self.peer_map.display = True
+
+    def _auto_close_electrum_management_card(self) -> None:
+        """Auto-close ElectrumX Management card after 1 minute and return to Network Activity."""
+        self._electrum_management_auto_close_timer = None
+        self._electrum_management_close_at = None
+        if self._show_electrum_card and self.electrum_management_card.display:
+            self._show_electrum_card = False
+            self.overview_network.display = True
+            self.electrum_management_card.display = False
+            self.electrum_management_card.border_subtitle = ""
+            # Also close ElectrumX log if it was open
+            if self._show_electrumx_log_card:
+                self._show_electrumx_log_card = False
+                self._electrumx_log_revert_at = None
+                if self._electrumx_log_revert_timer:
+                    self._electrumx_log_revert_timer.stop()
+                    self._electrumx_log_revert_timer = None
+                self.electrumx_log_card.display = False
+                self.electrumx_log_card.border_subtitle = "journalctl -u electrumx -n 30"
+                self.peer_map.display = True
 
     def action_toggle_fullscreen_map(self) -> None:
         """Toggle temporary fullscreen map view (bound to M key)."""
@@ -3586,14 +3670,35 @@ class Beacon(App):
             return
 
         if btn_id == "electrum-management-stop":
+            # Reset auto-close timer when user interacts
+            if self._electrum_management_auto_close_timer:
+                self._electrum_management_auto_close_timer.stop()
+                self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
+                self._electrum_management_auto_close_timer = self.set_timer(
+                    self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
+                )
             await self._handle_electrum_stop()
             return
 
         if btn_id == "electrum-management-start":
+            # Reset auto-close timer when user interacts
+            if self._electrum_management_auto_close_timer:
+                self._electrum_management_auto_close_timer.stop()
+                self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
+                self._electrum_management_auto_close_timer = self.set_timer(
+                    self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
+                )
             await self._handle_electrum_start()
             return
 
         if btn_id == "electrum-management-reinstall":
+            # Reset auto-close timer when user interacts
+            if self._electrum_management_auto_close_timer:
+                self._electrum_management_auto_close_timer.stop()
+                self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
+                self._electrum_management_auto_close_timer = self.set_timer(
+                    self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
+                )
             await self._handle_electrum_reinstall()
             return
 
@@ -3669,6 +3774,20 @@ class Beacon(App):
         # Handle 'j' key for ElectrumX log when Management card is visible
         if event.key == "j" and self._show_electrum_card and self.electrum_management_card.display:
             event.stop()
+            # Reset auto-close timer when user interacts
+            if self._electrum_management_auto_close_timer:
+                self._electrum_management_auto_close_timer.stop()
+                self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
+                self._electrum_management_auto_close_timer = self.set_timer(
+                    self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
+                )
+            # Also reset ElectrumX log timer if already open
+            if self._show_electrumx_log_card and self._electrumx_log_revert_timer:
+                self._electrumx_log_revert_timer.stop()
+                self._electrumx_log_revert_at = time.monotonic() + self.ELECTRUMX_LOG_REVERT_SECONDS
+                self._electrumx_log_revert_timer = self.set_timer(
+                    self.ELECTRUMX_LOG_REVERT_SECONDS, self._revert_electrumx_log_to_peer_map
+                )
             self.action_toggle_electrumx_log_card()
             return
 
