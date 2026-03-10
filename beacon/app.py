@@ -283,10 +283,10 @@ class CustomHeader(Static):
     def update_clock(self) -> None:
         """Update the clock display."""
         now = datetime.now()
-        # Add [z] at the beginning of the date/time string for visibility
         date_str = now.strftime("%A, %B %d, %Y")
-        time_str = now.strftime("%I:%M:%S %p")
-        full_time_str = f"[z] {date_str}  {time_str}"
+        # Use %-I to remove leading zero from hour (Linux/Unix)
+        time_str = now.strftime("%-I:%M:%S %p")
+        full_time_str = f"{date_str}  {time_str}"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -318,19 +318,31 @@ class CustomHeader(Static):
             width = self.size.width
             time_with_indicator = f"{full_time_str} {indicator_char}"
             time_len = len(time_with_indicator)
-            
-            if len(node_status_str) + time_len > width:
-                max_left = max(0, width - time_len - 2)
+
+            # Reserve space for [z] indicator
+            tz_indicator = "[z]"
+            tz_len = len(tz_indicator)
+
+            if len(node_status_str) + time_len + tz_len + 1 > width:
+                max_left = max(0, width - time_len - tz_len - 3)
                 node_status_str = node_status_str[:max_left] if max_left > 0 else ""
-            
+
             line = [' '] * width
-            
+
             time_start = width - time_len - 2
             for i, char in enumerate(time_with_indicator):
                 pos = time_start + i
                 if 0 <= pos < width:
                     line[pos] = char
-            
+
+            # Place [z] just before the time
+            tz_start = time_start - tz_len - 1
+            if tz_start >= 0:
+                for i, char in enumerate(tz_indicator):
+                    pos = tz_start + i
+                    if 0 <= pos < width:
+                        line[pos] = char
+
             cursor = 0
             for char in node_status_str:
                 if cursor < width:
@@ -340,9 +352,9 @@ class CustomHeader(Static):
             title_start = max(cursor, (width - len(title)) // 2)
             for i, char in enumerate(title):
                 pos = title_start + i
-                if pos < time_start:
+                if pos < time_start - tz_len - 1:  # Don't overlap with [z]
                     line[pos] = char
-            
+
             self.update(''.join(line))
         except Exception:
             self.update(f"{node_status_str}{title}  {full_time_str} {indicator_char}")
