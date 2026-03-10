@@ -287,8 +287,8 @@ class CustomHeader(Static):
         date_str = now.strftime("%A, %B %d, %Y")
         # Use %-I to remove leading zero from hour (Linux/Unix)
         time_str = now.strftime("%-I:%M:%S %p")
-        # For now, don't include [z] until we fix the width issue
-        full_time_str = f"{date_str}  {time_str}"
+        # Include [z] in the time string
+        full_time_str = f"{date_str}  {time_str} [z]"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -318,8 +318,8 @@ class CustomHeader(Static):
 
         try:
             width = self.size.width
-            # Add [z] between time and indicator
-            time_with_indicator = f"{full_time_str} [z] {indicator_char}"
+            # full_time_str already has [z], just add indicator
+            time_with_indicator = f"{full_time_str} {indicator_char}"
             time_len = len(time_with_indicator)
 
             if len(node_status_str) + time_len > width:
@@ -351,7 +351,7 @@ class CustomHeader(Static):
 
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{title}  {full_time_str} [z] {indicator_char}")
+            self.update(f"{node_status_str}{title}  {full_time_str} {indicator_char}")
 
 
 class StatusBar(Static):
