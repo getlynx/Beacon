@@ -283,12 +283,12 @@ class CustomHeader(Static):
     def update_clock(self) -> None:
         """Update the clock display."""
         now = datetime.now()
-        # Shorter date format to make room for [z]
-        date_str = now.strftime("%a, %b %d, %Y")  # Mon, Mar 10, 2026 instead of Monday, March 10, 2026
+        # Full date format restored
+        date_str = now.strftime("%A, %B %d, %Y")
         # Use %-I to remove leading zero from hour (Linux/Unix)
         time_str = now.strftime("%-I:%M:%S %p")
-        # Include [z] directly in the string that will definitely be displayed
-        full_time_str = f"{date_str}  {time_str} [z]"
+        # For now, don't include [z] until we fix the width issue
+        full_time_str = f"{date_str}  {time_str}"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -318,7 +318,8 @@ class CustomHeader(Static):
 
         try:
             width = self.size.width
-            time_with_indicator = f"{full_time_str} {indicator_char}"
+            # Add [z] between time and indicator
+            time_with_indicator = f"{full_time_str} [z] {indicator_char}"
             time_len = len(time_with_indicator)
 
             if len(node_status_str) + time_len > width:
@@ -327,7 +328,10 @@ class CustomHeader(Static):
 
             line = [' '] * width
 
-            time_start = width - time_len - 2
+            # Adjust positioning to ensure [z] is visible - move time string left by 5 more characters
+            time_start = width - time_len - 7  # Increased from -2 to -7 to ensure [z] fits
+            if time_start < 0:
+                time_start = 0
             for i, char in enumerate(time_with_indicator):
                 pos = time_start + i
                 if 0 <= pos < width:
@@ -347,7 +351,7 @@ class CustomHeader(Static):
 
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{title}  {full_time_str} {indicator_char}")
+            self.update(f"{node_status_str}{title}  {full_time_str} [z] {indicator_char}")
 
 
 class StatusBar(Static):
