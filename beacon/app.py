@@ -283,10 +283,10 @@ class CustomHeader(Static):
     def update_clock(self) -> None:
         """Update the clock display."""
         now = datetime.now()
-        # Show full date and time without [z] in the base string
+        # Add [z] at the beginning of the date/time string for visibility
         date_str = now.strftime("%A, %B %d, %Y")
         time_str = now.strftime("%I:%M:%S %p")
-        full_time_str = f"{date_str}  {time_str}"
+        full_time_str = f"[z] {date_str}  {time_str}"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -316,8 +316,7 @@ class CustomHeader(Static):
 
         try:
             width = self.size.width
-            # Add [z] between time and spinner indicator
-            time_with_indicator = f"{full_time_str} [z] {indicator_char}"
+            time_with_indicator = f"{full_time_str} {indicator_char}"
             time_len = len(time_with_indicator)
             
             if len(node_status_str) + time_len > width:
@@ -346,7 +345,7 @@ class CustomHeader(Static):
             
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{title}  {full_time_str} [z] {indicator_char}")
+            self.update(f"{node_status_str}{title}  {full_time_str} {indicator_char}")
 
 
 class StatusBar(Static):
