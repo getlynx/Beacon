@@ -222,25 +222,63 @@ class CustomHeader(Static):
     
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.indicator_state = "green"  # green, yellow, blue, lightning
-        self._reset_timer = None
-    
+        self.spinner_chars = ["\\", "|", "/", "-"]
+        self.spinner_index = 0
+        self.is_spinning = False
+        self._spinner_timer = None
+        self._minimum_spin_timer = None
+        self._spinner_start_time = None
+
     def on_mount(self) -> None:
         """Set up clock update interval."""
         self.update_clock()
         self.set_interval(1.0, self.update_clock)
-    
-    def set_indicator(self, state: str) -> None:
-        """Set the indicator state and auto-reset after 1 second."""
-        self.indicator_state = state
-        if self._reset_timer:
-            self._reset_timer.stop()
-        if state != "green":
-            self._reset_timer = self.set_timer(1.0, self.reset_indicator)
-    
+
+    def set_indicator(self, state: str = None) -> None:
+        """Start the spinner animation for at least 3 seconds."""
+        # state parameter kept for compatibility but not used (always shows spinner)
+        if not self.is_spinning:
+            self.is_spinning = True
+            self._spinner_start_time = time.monotonic()
+            self.spinner_index = 0
+            # Start spinner animation (updates every 100ms for smooth rotation)
+            if self._spinner_timer:
+                self._spinner_timer.stop()
+            self._spinner_timer = self.set_interval(0.1, self._update_spinner)
+            # Set minimum spin time of 3 seconds
+            if self._minimum_spin_timer:
+                self._minimum_spin_timer.stop()
+            self._minimum_spin_timer = self.set_timer(3.0, self._check_stop_spinner)
+
     def reset_indicator(self) -> None:
-        """Reset indicator to green."""
-        self.indicator_state = "green"
+        """Stop the spinner if minimum time has passed."""
+        if self._spinner_start_time and (time.monotonic() - self._spinner_start_time) >= 3.0:
+            self._stop_spinner()
+
+    def _update_spinner(self) -> None:
+        """Update the spinner to next character."""
+        if self.is_spinning:
+            self.spinner_index = (self.spinner_index + 1) % len(self.spinner_chars)
+            self.update_clock()
+
+    def _check_stop_spinner(self) -> None:
+        """Check if spinner should stop after minimum time."""
+        self._minimum_spin_timer = None
+        # Only stop if no recent activity
+        if self._spinner_start_time and (time.monotonic() - self._spinner_start_time) >= 3.0:
+            self._stop_spinner()
+
+    def _stop_spinner(self) -> None:
+        """Stop the spinner animation."""
+        self.is_spinning = False
+        if self._spinner_timer:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+        if self._minimum_spin_timer:
+            self._minimum_spin_timer.stop()
+            self._minimum_spin_timer = None
+        self._spinner_start_time = None
+        self.update_clock()
     
     def update_clock(self) -> None:
         """Update the clock display."""
@@ -267,16 +305,15 @@ class CustomHeader(Static):
             node_status_str += f" {node_ip}"
         node_status_str += " "
 
-        indicator_emoji = {
-            "green": E("🟢", "*"),
-            "yellow": E("🟡", "~"),
-            "blue": E("🔵", "o"),
-            "lightning": E("⚡", "!"),
-        }.get(self.indicator_state, E("🟢", "*"))
-        
+        # Use ASCII spinner when active, otherwise show a simple dot
+        if self.is_spinning:
+            indicator_char = self.spinner_chars[self.spinner_index]
+        else:
+            indicator_char = "•"
+
         try:
             width = self.size.width
-            time_with_indicator = f"{time_str} {indicator_emoji}"
+            time_with_indicator = f"{time_str} {indicator_char}"
             time_len = len(time_with_indicator)
             
             if len(node_status_str) + time_len > width:
@@ -305,7 +342,7 @@ class CustomHeader(Static):
             
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{title}  {time_str} {indicator_emoji}")
+            self.update(f"{node_status_str}{title}  {time_str} {indicator_char}")
 
 
 class StatusBar(Static):
@@ -4148,6 +4185,7 @@ class Beacon(App):
         )
         self.timezone_status.update("Refresh complete.")
         self.backup_card.refresh_state()
+        self.header.reset_indicator()
 
     def action_cycle_theme(self) -> None:
         """Cycle through available themes (t key)."""
@@ -4332,9 +4370,10 @@ class Beacon(App):
         self.set_timer(delay, callback)
     
     async def auto_refresh_data(self) -> None:
-        """Automatic refresh with yellow indicator."""
-        self.header.set_indicator("yellow")
+        """Automatic refresh with spinner indicator."""
+        self.header.set_indicator("refresh")
         await self.refresh_data()
+        self.header.reset_indicator()
 
     async def refresh_node_status_bar(self) -> None:
         """Refresh the status bar node status every 30 seconds."""
