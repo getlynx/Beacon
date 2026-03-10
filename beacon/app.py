@@ -283,7 +283,10 @@ class CustomHeader(Static):
     def update_clock(self) -> None:
         """Update the clock display."""
         now = datetime.now()
-        time_str = now.strftime("%A, %B %d, %Y  %I:%M:%S %p")
+        # Add [z] between date and time to indicate timezone hotkey
+        date_str = now.strftime("%A, %B %d, %Y")
+        time_str = now.strftime("%I:%M:%S %p")
+        full_time_str = f"{date_str} [z] {time_str}"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -313,7 +316,7 @@ class CustomHeader(Static):
 
         try:
             width = self.size.width
-            time_with_indicator = f"{time_str} {indicator_char}"
+            time_with_indicator = f"{full_time_str} {indicator_char}"
             time_len = len(time_with_indicator)
             
             if len(node_status_str) + time_len > width:
@@ -342,7 +345,7 @@ class CustomHeader(Static):
             
             self.update(''.join(line))
         except Exception:
-            self.update(f"{node_status_str}{title}  {time_str} {indicator_char}")
+            self.update(f"{node_status_str}{title}  {full_time_str} {indicator_char}")
 
 
 class StatusBar(Static):
@@ -1994,7 +1997,6 @@ class Beacon(App):
         ("t", "cycle_theme", "Theme"),
         ("c", "create_new_address", "New Address"),
         ("p", "toggle_value_currency_card", "Currency"),
-        ("z", "toggle_timezone_card", "Timezone"),
         ("x", "toggle_send_card", "Send"),
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
@@ -2958,6 +2960,8 @@ class Beacon(App):
         self.bind("ctrl+shift+g", "set_theme_graphite_neon", description="Graphite Neon", show=False)
         self.bind("ctrl+shift+w", "set_theme_warm_terminal", description="Warm Terminal", show=False)
         self.bind("ctrl+shift+b", "set_theme_beacon_midnight", description="Beacon Midnight", show=False)
+        # Keep 'z' binding active but hidden from footer (shown in header instead)
+        self.bind("z", "toggle_timezone_card", description="Timezone", show=False)
         self._sync_map_offset_binding()
         self._sync_restart_daemon_binding()
         self._sync_create_address_binding()
@@ -5459,7 +5463,6 @@ class Beacon(App):
             "s": ("toggle_staking", "Staking"),
             "t": ("cycle_theme", "Theme"),
             "p": ("toggle_value_currency_card", "Currency"),
-            "z": ("toggle_timezone_card", "Timezone"),
             "x": ("toggle_send_card", "Send"),
             "w": ("toggle_sweep_card", "Sweep"),
             "l": ("toggle_debug_log_card", "Debug Log"),
