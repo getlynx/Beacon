@@ -286,7 +286,8 @@ class CustomHeader(Static):
         date_str = now.strftime("%A, %B %d, %Y")
         # Use %-I to remove leading zero from hour (Linux/Unix)
         time_str = now.strftime("%-I:%M:%S %p")
-        full_time_str = f"{date_str}  {time_str}"
+        # Include [z] directly in the string that will definitely be displayed
+        full_time_str = f"{date_str}  {time_str} [z]"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -319,12 +320,8 @@ class CustomHeader(Static):
             time_with_indicator = f"{full_time_str} {indicator_char}"
             time_len = len(time_with_indicator)
 
-            # Reserve space for [z] indicator
-            tz_indicator = "[z]"
-            tz_len = len(tz_indicator)
-
-            if len(node_status_str) + time_len + tz_len + 1 > width:
-                max_left = max(0, width - time_len - tz_len - 3)
+            if len(node_status_str) + time_len > width:
+                max_left = max(0, width - time_len - 2)
                 node_status_str = node_status_str[:max_left] if max_left > 0 else ""
 
             line = [' '] * width
@@ -335,14 +332,6 @@ class CustomHeader(Static):
                 if 0 <= pos < width:
                     line[pos] = char
 
-            # Place [z] just before the time
-            tz_start = time_start - tz_len - 1
-            if tz_start >= 0:
-                for i, char in enumerate(tz_indicator):
-                    pos = tz_start + i
-                    if 0 <= pos < width:
-                        line[pos] = char
-
             cursor = 0
             for char in node_status_str:
                 if cursor < width:
@@ -352,7 +341,7 @@ class CustomHeader(Static):
             title_start = max(cursor, (width - len(title)) // 2)
             for i, char in enumerate(title):
                 pos = title_start + i
-                if pos < time_start - tz_len - 1:  # Don't overlap with [z]
+                if pos < time_start:
                     line[pos] = char
 
             self.update(''.join(line))
