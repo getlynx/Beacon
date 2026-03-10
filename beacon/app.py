@@ -4657,10 +4657,20 @@ class Beacon(App):
             f"24h Change:      {change_str}",
             f"Balance:         {wallet_balance if isinstance(wallet_balance, (int, float)) else '-'}",
             f"Value:           {_fmt_2dp(balance_value)}" if balance_value > 0 else "Value:           -",
-            f"Atomic DEX:      {_fmt(_convert(atomicdex))}",
-            f"Komodo Swap:     {_fmt(_convert(komodo))}",
-            f"FreiExchange:    {_fmt(_convert(frei))}",
         ]
+
+        # Only add exchange prices if they have meaningful values
+        atomicdex_converted = _convert(atomicdex)
+        if atomicdex_converted is not None and atomicdex_converted > 0:
+            pricing_lines.append(f"Atomic DEX:      {_fmt(atomicdex_converted)}")
+
+        komodo_converted = _convert(komodo)
+        if komodo_converted is not None and komodo_converted > 0:
+            pricing_lines.append(f"Komodo Swap:     {_fmt(komodo_converted)}")
+
+        frei_converted = _convert(frei)
+        if frei_converted is not None and frei_converted > 0:
+            pricing_lines.append(f"FreiExchange:    {_fmt(frei_converted)}")
 
         # Calculate value grid for different denominations
         value_lines = []
