@@ -3307,6 +3307,7 @@ class Beacon(App):
             self.overview_network.display = True
             self.electrum_installer_card.display = False
             self.electrum_management_card.display = False
+            self.electrum_management_card.border_subtitle = ""
         else:
             # Opening the ElectrumX card
             self._show_electrum_card = True
@@ -3348,16 +3349,7 @@ class Beacon(App):
             self.overview_network.display = True
             self.electrum_management_card.display = False
             self.electrum_management_card.border_subtitle = ""
-            # Also close ElectrumX log if it was open
-            if self._show_electrumx_log_card:
-                self._show_electrumx_log_card = False
-                self._electrumx_log_revert_at = None
-                if self._electrumx_log_revert_timer:
-                    self._electrumx_log_revert_timer.stop()
-                    self._electrumx_log_revert_timer = None
-                self.electrumx_log_card.display = False
-                self.electrumx_log_card.border_subtitle = "journalctl -u electrumx -n 30"
-                self.peer_map.display = True
+            # Note: We do NOT close the ElectrumX log here - it has its own 5-minute timer
 
     def action_toggle_fullscreen_map(self) -> None:
         """Toggle temporary fullscreen map view (bound to M key)."""
@@ -3775,25 +3767,34 @@ class Beacon(App):
                     await self._handle_electrum_install()
                     return
 
-        # Handle 'j' key for ElectrumX log when Management card is visible
-        if event.key == "j" and self._show_electrum_card and self.electrum_management_card.display:
-            event.stop()
-            # Reset auto-close timer when user interacts
-            if self._electrum_management_auto_close_timer:
-                self._electrum_management_auto_close_timer.stop()
-                self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
-                self._electrum_management_auto_close_timer = self.set_timer(
-                    self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
-                )
-            # Also reset ElectrumX log timer if already open
-            if self._show_electrumx_log_card and self._electrumx_log_revert_timer:
-                self._electrumx_log_revert_timer.stop()
-                self._electrumx_log_revert_at = time.monotonic() + self.ELECTRUMX_LOG_REVERT_SECONDS
-                self._electrumx_log_revert_timer = self.set_timer(
-                    self.ELECTRUMX_LOG_REVERT_SECONDS, self._revert_electrumx_log_to_peer_map
-                )
-            self.action_toggle_electrumx_log_card()
-            return
+        # Handle 'j' key for ElectrumX log - available when:
+        # 1. Management card is visible (to open log)
+        # 2. ElectrumX log is already visible (to close it)
+        if event.key == "j":
+            # Case 1: Management card is open - allow toggling the log
+            if self._show_electrum_card and self.electrum_management_card.display:
+                event.stop()
+                # Reset Management card auto-close timer when user interacts
+                if self._electrum_management_auto_close_timer:
+                    self._electrum_management_auto_close_timer.stop()
+                    self._electrum_management_close_at = time.monotonic() + self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS
+                    self._electrum_management_auto_close_timer = self.set_timer(
+                        self.ELECTRUM_MANAGEMENT_CLOSE_SECONDS, self._auto_close_electrum_management_card
+                    )
+                # Reset ElectrumX log timer if already open
+                if self._show_electrumx_log_card and self._electrumx_log_revert_timer:
+                    self._electrumx_log_revert_timer.stop()
+                    self._electrumx_log_revert_at = time.monotonic() + self.ELECTRUMX_LOG_REVERT_SECONDS
+                    self._electrumx_log_revert_timer = self.set_timer(
+                        self.ELECTRUMX_LOG_REVERT_SECONDS, self._revert_electrumx_log_to_peer_map
+                    )
+                self.action_toggle_electrumx_log_card()
+                return
+            # Case 2: ElectrumX log is visible (Management card might be closed) - allow closing the log
+            elif self._show_electrumx_log_card:
+                event.stop()
+                self.action_toggle_electrumx_log_card()
+                return
 
     def _init_backup_card(self) -> None:
         """Initialize backup card state."""
