@@ -134,15 +134,45 @@ def _show_startup_splash() -> None:
     left_pad = max(0, (columns - box_width) // 2)
     indent = " " * left_pad
 
-    # Clear screen and render centered placeholder box.
-    sys.stdout.write("\x1b[2J\x1b[H")
-    sys.stdout.write("\n" * top_pad)
-    sys.stdout.write(f"{indent}{' ' * box_width}\n")
-    for line in content_lines:
-        sys.stdout.write(f"{indent}  {line:<{box_width - 4}}\n")
-    sys.stdout.write(f"{indent}{' ' * box_width}\n")
-    sys.stdout.flush()
-    time.sleep(2.0)
+    # Rainbow ANSI color palette — ends on green (Lynx brand)
+    RESET = "\x1b[0m"
+    RAINBOW = [
+        "\x1b[38;5;196m",  # red
+        "\x1b[38;5;202m",  # orange
+        "\x1b[38;5;226m",  # yellow
+        "\x1b[38;5;46m",   # bright green
+        "\x1b[38;5;51m",   # cyan
+        "\x1b[38;5;21m",   # blue
+        "\x1b[38;5;129m",  # violet
+        "\x1b[38;5;201m",  # magenta
+    ]
+    GREEN = "\x1b[38;5;46m"
+
+    def _render_frame(logo_colors: list[str], dim_rest: bool = False) -> None:
+        sys.stdout.write("\x1b[2J\x1b[H")
+        sys.stdout.write("\n" * top_pad)
+        sys.stdout.write(f"{indent}{' ' * box_width}\n")
+        for i, line in enumerate(content_lines):
+            if i < len(SPLASH_LOGO):
+                color = logo_colors[i % len(logo_colors)]
+                sys.stdout.write(f"{indent}  {color}{line:<{box_width - 4}}{RESET}\n")
+            else:
+                dimmed = "\x1b[2m" if dim_rest else ""
+                sys.stdout.write(f"{indent}  {dimmed}{line:<{box_width - 4}}{RESET}\n")
+        sys.stdout.write(f"{indent}{' ' * box_width}\n")
+        sys.stdout.flush()
+
+    # Animate: cycle rainbow colors across logo lines for ~1.8s (18 frames @ 100ms)
+    num_logo_lines = len(SPLASH_LOGO)
+    frames = 18
+    for frame in range(frames):
+        colors = [RAINBOW[(frame + i) % len(RAINBOW)] for i in range(num_logo_lines)]
+        _render_frame(colors, dim_rest=True)
+        time.sleep(0.1)
+
+    # Final frame: all green, text at full brightness
+    _render_frame([GREEN] * num_logo_lines, dim_rest=False)
+    time.sleep(1.2)
     # Intentionally do not clear here; let Textual take over immediately.
 
 
