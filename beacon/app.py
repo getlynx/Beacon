@@ -12,6 +12,7 @@ from pathlib import Path
 from packaging.version import Version, InvalidVersion
 
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual import events
 from textual.containers import CenterMiddle, Container, VerticalScroll
 from textual.screen import ModalScreen
@@ -1984,7 +1985,7 @@ class ElectrumXManagementCard(VerticalScroll):
 
 
 class Beacon(App):
-    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e", "o", "y")
+    FULLSCREEN_HIDDEN_BINDINGS = ("r", "s", "t", "c", "p", "z", "x", "w", "e", "o")
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("o", "restart_daemon", "Restart"),
@@ -1997,7 +1998,7 @@ class Beacon(App):
         ("w", "toggle_sweep_card", "Sweep"),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
         ("l", "toggle_debug_log_card", "Debug Log"),
-        ("y", "toggle_peer_location", "Location"),
+        Binding("y", "toggle_peer_location", "Location", show=False),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
 
@@ -4938,11 +4939,18 @@ class Beacon(App):
             ),
         )
         def _update_peers_card() -> None:
-            self.overview_peers.border_subtitle = (
-                "Showing city/state (press y for IP)"
-                if self._show_peer_location
-                else "Peers checked every ~2 minutes (press y for location)"
-            )
+            if self._show_peer_location:
+                self.overview_peers.border_subtitle = (
+                    "[@click='app.toggle_peer_location']"
+                    "Peers checked every ~2 minutes"
+                    "[/]"
+                )
+            else:
+                self.overview_peers.border_subtitle = (
+                    "[@click='app.toggle_peer_location']"
+                    "Peers checked every ~2 minutes | press \[y] or click here to toggle"
+                    "[/]"
+                )
             self.overview_peers.update_lines(
                 peer_lines_for_panel,
                 peer_count=peer_count,
