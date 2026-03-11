@@ -19,6 +19,7 @@ from textual.theme import Theme, BUILTIN_THEMES
 from textual.reactive import reactive
 from textual.strip import Strip
 from textual.widgets import Button, Footer, Input, Link, SelectionList, Sparkline, Static, TabbedContent, TabPane
+from rich.cells import cell_len
 from rich.console import Group
 from rich.style import Style
 from rich.text import Text
@@ -217,6 +218,7 @@ class CustomHeader(Static):
         background: $boost;
         color: $text;
         height: 1;
+        link-style: none;
     }
     """
     
@@ -287,8 +289,6 @@ class CustomHeader(Static):
         date_str = now.strftime("%A, %B %d, %Y")
         # Use %-I to remove leading zero from hour (Linux/Unix)
         time_str = now.strftime("%-I:%M:%S %p")
-        # Include [z] in the time string
-        full_time_str = f"{date_str}  {time_str} [z]"
         title = self.app.title if hasattr(self.app, 'title') else "Beacon"
         
         node_status = "unknown"
@@ -310,48 +310,38 @@ class CustomHeader(Static):
             node_status_str += f" {node_ip}"
         node_status_str += " "
 
-        # Use ASCII spinner when active, otherwise show a simple dot
+        # Use ASCII spinner when active, show nothing when idle
         if self.is_spinning:
             indicator_char = self.spinner_chars[self.spinner_index]
         else:
-            indicator_char = "•"
+            indicator_char = " "
 
         try:
             width = self.size.width
-            # full_time_str already has [z], just add indicator
-            time_with_indicator = f"{full_time_str} {indicator_char}"
-            time_len = len(time_with_indicator)
+            # Visible (plain text) length for layout calculations
+            visible_right = f"{date_str} {time_str} {indicator_char}"
+            time_len = len(visible_right)
+            time_start = max(0, width - time_len)
 
             if len(node_status_str) + time_len > width:
                 max_left = max(0, width - time_len - 2)
                 node_status_str = node_status_str[:max_left] if max_left > 0 else ""
 
-            line = [' '] * width
+            # Date/time is the clickable link targeting the z key action
+            right_markup = f"[@click='app.toggle_timezone_card']{date_str} {time_str}[/] {indicator_char}"
 
-            # Adjust positioning to ensure [z] is visible - move time string left by 5 more characters
-            time_start = width - time_len - 7  # Increased from -2 to -7 to ensure [z] fits
-            if time_start < 0:
-                time_start = 0
-            for i, char in enumerate(time_with_indicator):
-                pos = time_start + i
-                if 0 <= pos < width:
-                    line[pos] = char
+            ns_width = cell_len(node_status_str)
+            title_start = max(ns_width, (width - len(title)) // 2)
+            title_end = min(title_start + len(title), time_start)
+            actual_title = title[:max(0, title_end - title_start)]
 
-            cursor = 0
-            for char in node_status_str:
-                if cursor < width:
-                    line[cursor] = char
-                    cursor += 1
+            spaces_before_title = max(0, title_start - ns_width)
+            spaces_after_title = max(0, time_start - title_start - len(actual_title))
 
-            title_start = max(cursor, (width - len(title)) // 2)
-            for i, char in enumerate(title):
-                pos = title_start + i
-                if pos < time_start:
-                    line[pos] = char
-
-            self.update(''.join(line))
+            line = node_status_str + ' ' * spaces_before_title + actual_title + ' ' * spaces_after_title + right_markup
+            self.update(line)
         except Exception:
-            self.update(f"{node_status_str}{title}  {full_time_str} {indicator_char}")
+            self.update(f"{node_status_str}{title}  {date_str} {time_str} {indicator_char}")
 
 
 class StatusBar(Static):
@@ -2579,6 +2569,8 @@ class Beacon(App):
         self._sweep_card_idle_timer = None
         self._currency_card_auto_hide_timer = None
         self._timezone_card_auto_hide_timer = None
+        self._timezone_card_countdown_timer = None
+        self._timezone_card_countdown_secs = 0
         self._map_fullscreen_timer = None
         self._map_fullscreen_render_timer = None
         self._electrum_management_auto_close_timer = None
@@ -3052,6 +3044,8 @@ class Beacon(App):
     def _update_timezone_card_title(self, timezone_name: str | None) -> None:
         tz_display = timezone_name if timezone_name and timezone_name != "unknown" else "unknown"
         self.timezone_card.border_title = f"{E('🕒', 'T')} Timezone ({tz_display})"
+        secs = self._timezone_card_countdown_secs if self._show_timezone_card else 60
+        self.timezone_card.border_subtitle = f"press \\[z] or click the date to toggle | closes in {secs}s"
 
     async def refresh_timezone_list(self) -> None:
         timezones = await asyncio.get_event_loop().run_in_executor(None, self.system.list_timezones)
@@ -3074,6 +3068,23 @@ class Beacon(App):
         ]
         self.currency_select.add_options(options)
         self.currency_card.border_title = f"{E('💵', '$')} Currency ({self._currency})"
+
+    def action_screenshot(self, filename: str | None = None, path: str | None = None) -> None:
+        """Override to save screenshot directly to /tmp and notify user."""
+        from pathlib import Path
+        from datetime import datetime
+        save_dir = Path(path or "/tmp")
+        fname = filename or datetime.now().strftime("Beacon-Lynx-%Y-%m-%d-%H-%M-%S.svg")
+        dest = save_dir / fname
+        try:
+            dest.write_text(self.export_screenshot(), encoding="utf-8")
+            self.notify(f"Screenshot saved to {dest}", title="Screenshot", timeout=6)
+        except Exception as exc:
+            self.notify(f"Screenshot failed: {exc}", title="Screenshot", severity="error", timeout=6)
+
+    def deliver_screenshot(self, filename: str | None = None, path: str | None = None, time_format: str | None = None) -> None:
+        """Override to save screenshot directly to /tmp (avoids missing ~/Downloads)."""
+        self.action_screenshot(filename=filename, path=path or "/tmp")
 
     def action_toggle_send_card(self) -> None:
         """Toggle Send card visibility (bound to x key). Hides Sweep and Difficulty chart if active."""
@@ -3173,11 +3184,24 @@ class Beacon(App):
         if self._timezone_card_auto_hide_timer:
             self._timezone_card_auto_hide_timer.stop()
             self._timezone_card_auto_hide_timer = None
+        if self._timezone_card_countdown_timer:
+            self._timezone_card_countdown_timer.stop()
+            self._timezone_card_countdown_timer = None
         if active:
             self._timezone_card_auto_hide_timer = self.set_timer(60.0, self._auto_deactivate_timezone_card)
+            self._timezone_card_countdown_secs = 60
+            self._timezone_card_countdown_timer = self.set_interval(1.0, self._tick_timezone_countdown)
+
+    def _tick_timezone_countdown(self) -> None:
+        self._timezone_card_countdown_secs = max(0, self._timezone_card_countdown_secs - 1)
+        secs = self._timezone_card_countdown_secs
+        self.timezone_card.border_subtitle = f"press \[z] or click the date to toggle | closes in {secs}s"
 
     def _auto_deactivate_timezone_card(self) -> None:
         self._timezone_card_auto_hide_timer = None
+        if self._timezone_card_countdown_timer:
+            self._timezone_card_countdown_timer.stop()
+            self._timezone_card_countdown_timer = None
         if not self._show_timezone_card:
             return
         self._set_timezone_card_active(False)
