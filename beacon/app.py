@@ -2076,7 +2076,7 @@ class Beacon(App):
         Binding("x", "toggle_send_card", "Create Send transaction", show=False),
         Binding("w", "toggle_sweep_card", "Create Sweep transaction", show=False),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
-        ("l", "toggle_debug_log_card", "View live daemon debug log"),
+        Binding("l", "toggle_debug_log_card", "View live daemon debug log", show=False),
         Binding("y", "toggle_peer_location", "Toggle Peers view by IP or Location", show=False),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
@@ -5092,13 +5092,30 @@ class Beacon(App):
         self._sync_create_address_binding()
         self._sync_electrum_binding()
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
+
+        # Determine if staking should be available
+        wallet_balance = data.get("wallet_balance", 0)
+        has_addresses = len(addr_list) > 0 if addr_list else False
+        staking_available = wallet_balance > 0 and has_addresses
+
+        # Set staking status
         staking_status = (
             "enabled" if self._staking_enabled is True
             else "disabled" if self._staking_enabled is False
             else "syncing" if isinstance(blockchain_info, dict) and blockchain_info.get("initialblockdownload")
             else "unknown"
         )
-        self._schedule_update(0.3, lambda: self.node_status_card.update_lines(node_status_lines, staking_status=staking_status))
+
+        def _update_staking_card() -> None:
+            if not self._showing_startup_splash:
+                # Hide staking card if no balance or addresses, otherwise show with status
+                if not staking_available:
+                    self.node_status_card.display = False
+                else:
+                    self.node_status_card.display = True
+                    self.node_status_card.update_lines(node_status_lines, staking_status=staking_status)
+
+        self._schedule_update(0.3, _update_staking_card)
         beacon_ver_display = f"v{BEACON_VERSION}"
         daemon_label = self._node_name or "Daemon"
         ibd_status = "Syncing" if data['sync_monitor'] == "active" else "Synced"
@@ -5121,7 +5138,7 @@ class Beacon(App):
         daemon_status_lines = [
             f"{daemon_label + ' Uptime':<{col}} {uptime_display}",
             f"{daemon_label + ' Version':<{col}} {daemon_version}",
-            f"{'Beacon Version':<{col}} {beacon_ver_display}",
+            f"{'Beacon Version':<{col}} [@click='app.toggle_debug_log_card']{beacon_ver_display}[/]",
             f"{'Initial Blocks':<{col}} {ibd_status}",
             f"{'Tenant Status':<{col}} unregistered",
             f"{'Operating System':<{col}} {self._os_name}",
