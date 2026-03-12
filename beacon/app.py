@@ -1814,7 +1814,7 @@ class AddressQRScreen(ModalScreen[None]):
     }
     #qr-address {
         text-align: center;
-        padding-top: 1;
+        padding-top: 0;
         color: $text-muted;
         width: 100%;
         height: auto;
@@ -1827,9 +1827,10 @@ class AddressQRScreen(ModalScreen[None]):
     }
     """
 
-    def __init__(self, address: str) -> None:
+    def __init__(self, address: str, chain_name: str = "Bitcoin") -> None:
         super().__init__()
         self._address = address
+        self._chain_name = chain_name
 
     def compose(self) -> ComposeResult:
         import io
@@ -1844,7 +1845,7 @@ class AddressQRScreen(ModalScreen[None]):
         qr_str = output.getvalue().rstrip('\n')
 
         with Container(id="qr-modal"):
-            yield Static("Wallet Address", id="qr-title")
+            yield Static(f"Wallet Address ({self._chain_name})", id="qr-title")
             yield Static(qr_str, id="qr-code")
             yield Static(self._address, id="qr-address")
             yield Static("[ press any key or click to close ]", id="qr-dismiss")
@@ -2834,6 +2835,7 @@ class Beacon(App):
         self._currency = "USD"
         self.header = CustomHeader()
         self._staking_enabled = None  # None = unknown, True = enabled, False = disabled
+        self._staking_available = False  # True when wallet has balance and addresses
         self._wallet_ready = False
         self._wallet_lock_state = "unencrypted"
         self._wallet_unlock_purpose: str | None = None
@@ -3793,7 +3795,11 @@ class Beacon(App):
         """Show QR code modal for the address at the given index."""
         try:
             addr, _, _ = self.overview_addresses._addr_entries[int(idx)]
-            self.push_screen(AddressQRScreen(addr))
+            chain_name = "Bitcoin"  # default
+            blockchain_info = self.rpc._safe_call("getblockchaininfo")
+            if isinstance(blockchain_info, dict):
+                chain_name = blockchain_info.get("chain", "Bitcoin").title()
+            self.push_screen(AddressQRScreen(addr, chain_name))
         except (IndexError, ValueError):
             pass
 
@@ -5180,7 +5186,8 @@ class Beacon(App):
         # Determine if staking should be available
         wallet_balance = data.get("wallet_balance", 0)
         has_addresses = len(addr_list) > 0 if addr_list else False
-        staking_available = wallet_balance > 0 and has_addresses
+        self._staking_available = wallet_balance > 0 and has_addresses
+        staking_available = self._staking_available
 
         # Set staking status
         staking_status = (
@@ -5304,13 +5311,18 @@ class Beacon(App):
                         self._maybe_notify_schrodinger_block(bh, None)
             
             # Update staking status on card: use tracked state if available, otherwise show sync state
-            staking_status = (
-                "enabled" if self._staking_enabled is True
-                else "disabled" if self._staking_enabled is False
-                else "syncing" if isinstance(blockchain_info, dict) and blockchain_info.get("initialblockdownload")
-                else "unknown"
-            )
-            self.node_status_card.update_staking_status(staking_status)
+            # Only show subtitle when staking is available (wallet has balance and addresses)
+            if self._staking_available:
+                staking_status = (
+                    "enabled" if self._staking_enabled is True
+                    else "disabled" if self._staking_enabled is False
+                    else "syncing" if isinstance(blockchain_info, dict) and blockchain_info.get("initialblockdownload")
+                    else "unknown"
+                )
+                self.node_status_card.update_staking_status(staking_status)
+            else:
+                self.node_status_card._stop_animation()
+                self.node_status_card.border_subtitle = ""
 
             self.status_bar.refresh()
             self.header.update_clock()
