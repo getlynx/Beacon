@@ -1,25 +1,7 @@
 import os
-import shutil
 import sys
-import time
-import textwrap
 import contextlib
 
-SPLASH_TEXT = (
-    "In an era where digital information faces constant threats of loss, "
-    "manipulation, or obsolescence, Lynx Data Storage technology offers a "
-    "groundbreaking solution for permanent data storage.\n\n"
-    "Running Beacon helps advance this mission. Thank you for being part of it.\n\n"
-    "Read more at https://docs.getlynx.io/"
-)
-SPLASH_LOGO = [
-    "██╗  ██╗   ██╗███╗   ██╗██╗  ██╗",
-    "██║  ╚██╗ ██╔╝████╗  ██║╚██╗██╔╝",
-    "██║   ╚████╔╝ ██╔██╗ ██║ ╚███╔╝ ",
-    "██║    ╚██╔╝  ██║╚██╗██║ ██╔██╗ ",
-    "███████╗██║   ██║ ╚████║██╔╝ ██╗",
-    "╚══════╝╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝",
-]
 
 
 class _TraceStream:
@@ -107,74 +89,6 @@ def _suppress_fds_during_import() -> None:
         os.close(devnull_fd)
 
 
-def _show_startup_splash() -> None:
-    if os.environ.get("BEACON_NO_SPLASH") == "1":
-        return
-    if not (sys.stdout.isatty() and sys.stdin.isatty()):
-        return
-    columns, rows = shutil.get_terminal_size((100, 30))
-    inner_width = max(44, min(columns - 8, 72))
-    wrap_width = max(20, inner_width - 4)
-    wrapped: list[str] = []
-    paragraphs = SPLASH_TEXT.split("\n\n")
-    for idx, paragraph in enumerate(paragraphs):
-        para = paragraph.strip()
-        if para:
-            wrapped.extend(textwrap.wrap(para, width=wrap_width))
-        else:
-            wrapped.append("")
-        if idx < len(paragraphs) - 1:
-            wrapped.append("")
-    content_lines = SPLASH_LOGO + [""] + wrapped
-    box_width = min(columns - 2, max(len(line) for line in content_lines) + 4)
-    box_width = max(24, box_width)
-    box_height = len(content_lines) + 2
-    total_lines = box_height + 2  # top/bottom border + content
-    top_pad = max(0, (rows - total_lines) // 2)
-    left_pad = max(0, (columns - box_width) // 2)
-    indent = " " * left_pad
-
-    # Rainbow ANSI color palette — ends on green (Lynx brand)
-    RESET = "\x1b[0m"
-    RAINBOW = [
-        "\x1b[38;5;196m",  # red
-        "\x1b[38;5;202m",  # orange
-        "\x1b[38;5;226m",  # yellow
-        "\x1b[38;5;46m",   # bright green
-        "\x1b[38;5;51m",   # cyan
-        "\x1b[38;5;21m",   # blue
-        "\x1b[38;5;129m",  # violet
-        "\x1b[38;5;201m",  # magenta
-    ]
-    GREEN = "\x1b[38;5;46m"
-
-    def _render_frame(logo_colors: list[str], dim_rest: bool = False) -> None:
-        sys.stdout.write("\x1b[2J\x1b[H")
-        sys.stdout.write("\n" * top_pad)
-        sys.stdout.write(f"{indent}{' ' * box_width}\n")
-        for i, line in enumerate(content_lines):
-            if i < len(SPLASH_LOGO):
-                color = logo_colors[i % len(logo_colors)]
-                sys.stdout.write(f"{indent}  {color}{line:<{box_width - 4}}{RESET}\n")
-            else:
-                dimmed = "\x1b[2m" if dim_rest else ""
-                sys.stdout.write(f"{indent}  {dimmed}{line:<{box_width - 4}}{RESET}\n")
-        sys.stdout.write(f"{indent}{' ' * box_width}\n")
-        sys.stdout.flush()
-
-    # Animate: cycle rainbow colors across logo lines for ~1.8s (18 frames @ 100ms)
-    num_logo_lines = len(SPLASH_LOGO)
-    frames = 18
-    for frame in range(frames):
-        colors = [RAINBOW[(frame + i) % len(RAINBOW)] for i in range(num_logo_lines)]
-        _render_frame(colors, dim_rest=True)
-        time.sleep(0.1)
-
-    # Final frame: all green, text at full brightness
-    _render_frame([GREEN] * num_logo_lines, dim_rest=False)
-    time.sleep(1.2)
-    # Intentionally do not clear here; let Textual take over immediately.
-
 
 def _apply_terminal_compatibility_patches() -> None:
     """Avoid terminal capability probes that can leak visible chars on some clients.
@@ -230,7 +144,6 @@ if __name__ == "__main__":
     trace_enabled = os.environ.get("BEACON_TRACE_STARTUP") == "1"
     _restore_trace, _trace_path = _enable_startup_trace()
     try:
-        _show_startup_splash()
         _apply_terminal_compatibility_patches()
         _import_and_run_app(trace_enabled=trace_enabled, trace_path=_trace_path)
         _maybe_restart_after_update()

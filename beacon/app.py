@@ -47,6 +47,25 @@ INSTALL_ROOT = "/usr/local/beacon"
 CRYPTOID_NODES_URL = "https://chainz.cryptoid.info/lynx/api.dws?q=nodes"
 LYNX_WORKING_DIR = os.environ.get("LYNX_WORKING_DIR", "/var/lib/lynx")
 
+# Startup splash content — moved into loading states of cards
+_LYNX_LOGO_LINES = [
+    "██╗  ██╗   ██╗███╗   ██╗██╗  ██╗",
+    "██║  ╚██╗ ██╔╝████╗  ██║╚██╗██╔╝",
+    "██║   ╚████╔╝ ██╔██╗ ██║ ╚███╔╝ ",
+    "██║    ╚██╔╝  ██║╚██╗██║ ██╔██╗ ",
+    "███████╗██║   ██║ ╚████║██╔╝ ██╗",
+    "╚══════╝╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝",
+]
+_LOGO_RAINBOW = [196, 202, 226, 46, 51, 21, 129, 201]  # 256-color ANSI indices
+
+_SPLASH_MISSION_TEXT = (
+    "In an era where digital information faces constant threats of loss, "
+    "manipulation, or obsolescence, Lynx Data Storage technology offers a "
+    "groundbreaking solution for permanent data storage.\n\n"
+    "Running Beacon helps advance this mission. Thank you for being part of it.\n\n"
+    "Read more at https://docs.getlynx.io/"
+)
+
 # Remove undesired built-in themes globally for this app session.
 for _theme_name in (
     "solarized-light",
@@ -434,15 +453,11 @@ class DaemonStatusCard(VerticalScroll):
         self.add_class("card")
         self.add_class(accent_class)
         self._text = Static("... loading", id="daemon-status-text")
-        self._electrumx_label = Static("", classes="electrumx-label")
-        self._install_link = Link("[i]nstall", url="#", id="electrumx-install-inline")
-        self._electrumx_row = Container(self._electrumx_label, self._install_link, classes="electrumx-status-row")
-        self._electrumx_row.display = False
         self.lines: list[str] = []
+        self._showing_install_link = False
 
     def compose(self) -> ComposeResult:
         yield self._text
-        yield self._electrumx_row
 
     def update_lines(self, lines: list[str], electrumx_label: str = "", show_install_btn: bool = False) -> None:
         """Update daemon status text lines with ElectrumX status.
@@ -451,32 +466,34 @@ class DaemonStatusCard(VerticalScroll):
         Otherwise shows the electrumx_label as plain text inline with other lines.
         """
         self.lines = lines
+        self._showing_install_link = show_install_btn
 
         if not lines:
             self._text.update("... loading")
-            self._electrumx_row.display = False
             return
 
-        # Build all text lines including ElectrumX status if not showing button
+        # Build all text lines including ElectrumX status
         all_lines = lines.copy()
 
         if show_install_btn:
-            # Show the separate row with link
-            self._electrumx_label.update(f"{'ElectrumX Status':<{self.COL}} ")
-            self._electrumx_row.display = True
-        else:
-            # Hide the row
-            self._electrumx_row.display = False
-            # Add ElectrumX status to regular lines if label provided
-            if electrumx_label:
-                all_lines.append(f"{'ElectrumX Status':<{self.COL}} {electrumx_label}")
+            # Add ElectrumX status with Install text (colored, no underline)
+            # Handled by 'i' hotkey
+            all_lines.append(f"{'ElectrumX Status':<{self.COL}} [@click='app.install_electrumx']Install[/]")
+        elif electrumx_label:
+            # Add ElectrumX status as plain text
+            all_lines.append(f"{'ElectrumX Status':<{self.COL}} {electrumx_label}")
 
-        # Build alternating-colour text for all lines
-        texts = [
-            Text(line, style="dim" if i % 2 == 1 else "")
-            for i, line in enumerate(all_lines)
-        ]
-        self._text.update(Group(*texts))
+        # Build text with alternating colors using markup
+        formatted_lines = []
+        for i, line in enumerate(all_lines):
+            if i % 2 == 1:
+                # Dim style for odd lines
+                formatted_lines.append(f"[dim]{line}[/dim]")
+            else:
+                formatted_lines.append(line)
+
+        # Join all lines and update the Static widget with markup
+        self._text.update("\n".join(formatted_lines))
 
 
 class StorageCapabilityPanel(VerticalScroll):
@@ -957,18 +974,54 @@ class StakingPanel(VerticalScroll):
         self.accent_class = accent_class
         self.border_title = title
         self.border_title_align = ("left", "top")
-        self.border_subtitle = "Staking: loading"
+        self.border_subtitle = "[@click='app.toggle_staking']Staking: loading[/]"
         self.border_subtitle_align = ("right", "bottom")
         self.add_class("card")
         self.add_class(accent_class)
         self._content = Static("... loading", classes="network-row-text")
+        self._rainbow_colors = ["red", "orange", "yellow", "green", "blue", "purple", "magenta"]
+        self._rainbow_index = 0
+        self._animation_timer = None
 
     def compose(self) -> ComposeResult:
         yield self._content
 
+    def _animate_rainbow(self) -> None:
+        """Animate rainbow colors across each letter of 'enabled'."""
+        # Each letter gets a different color, shifting left to right
+        enabled_text = "enabled"
+        rainbow_word = ""
+        for i, letter in enumerate(enabled_text):
+            # Subtract rainbow_index to make colors flow left to right
+            color_index = (i - self._rainbow_index) % len(self._rainbow_colors)
+            color = self._rainbow_colors[color_index]
+            rainbow_word += f"[{color}]{letter}[/]"
+
+        # Note: Due to Textual markup limitations, hover will only highlight individual letters
+        self.border_subtitle = f"[@click='app.toggle_staking']Staking: {rainbow_word}[/]"
+        self._rainbow_index = (self._rainbow_index + 1) % len(self._rainbow_colors)
+
+    def _start_animation(self) -> None:
+        """Start the rainbow text animation."""
+        if self._animation_timer is None:
+            self._animate_rainbow()  # Apply first color immediately
+            self._animation_timer = self.set_interval(0.2, self._animate_rainbow)  # Animate color flow
+
+    def _stop_animation(self) -> None:
+        """Stop the rainbow text animation."""
+        if self._animation_timer is not None:
+            self._animation_timer.stop()
+            self._animation_timer = None
+            # Reset to normal disabled text
+            self.border_subtitle = "[@click='app.toggle_staking']Staking: disabled[/]"
+
     def update_lines(self, lines: list[str], staking_status: str | None = None) -> None:
         if staking_status is not None:
-            self.border_subtitle = f"Staking: {staking_status}"
+            # Start or stop animation based on staking status
+            if staking_status == "enabled":
+                self._start_animation()
+            else:
+                self._stop_animation()
         if not lines:
             self._content.update("... loading")
             return
@@ -980,7 +1033,11 @@ class StakingPanel(VerticalScroll):
 
     def update_staking_status(self, status: str) -> None:
         """Update only the staking status subtitle (e.g. after toggle)."""
-        self.border_subtitle = f"Staking: {status}"
+        # Start or stop animation based on staking status
+        if status == "enabled":
+            self._start_animation()
+        else:
+            self._stop_animation()
 
 
 class PeerListPanel(VerticalScroll):
@@ -1001,7 +1058,7 @@ class PeerListPanel(VerticalScroll):
         self.border_subtitle_align = ("left", "bottom")
         self.add_class("card")
         self.add_class(accent_class)
-        self._content = Static("... loading", classes="network-row-text")
+        self._content = Static(_SPLASH_MISSION_TEXT, classes="network-row-text")
         self._lines: list[tuple[str, int | None] | tuple[str, str, str, str, int | None]] = []
         self._blink_indices: set[int] = set()
         self._blink_visible = True
@@ -1279,14 +1336,32 @@ class NetworkActivityPanel(VerticalScroll):
         self.border_title = title
         self.add_class("card")
         self.add_class(accent_class)
-        self._content = Static("... loading", classes="network-row-text")
+        self._content = Static("", classes="network-row-text")
         self._heights: list[int] = []
         self._raw_entries: list[tuple[int, str, str, str, str]] = []
         self._difficulties: list[float] | None = None
         self._syncing = False
+        self._logo_anim_frame: int = 0
+        self._logo_anim_timer = None
 
     def compose(self) -> ComposeResult:
         yield self._content
+
+    def on_mount(self) -> None:
+        """Start logo animation when the widget is mounted."""
+        self._logo_anim_timer = self.set_interval(0.1, self._logo_tick)
+
+    def _logo_tick(self) -> None:
+        """Render one frame of the animated LYNX logo, centered."""
+        frame = self._logo_anim_frame
+        texts = []
+        for i, line in enumerate(_LYNX_LOGO_LINES):
+            color_idx = _LOGO_RAINBOW[(frame + i) % len(_LOGO_RAINBOW)]
+            # Center the line and apply color
+            centered = Text(line, style=f"color({color_idx})", justify="center")
+            texts.append(centered)
+        self._content.update(Group(*texts))
+        self._logo_anim_frame += 1
 
     def on_resize(self) -> None:
         self._render_content()
@@ -1357,8 +1432,12 @@ class NetworkActivityPanel(VerticalScroll):
             self.border_subtitle = "Ordered by block height"
             self.border_subtitle_align = ("right", "bottom")
         if not entries:
-            self._content.update("... loading")
+            # Keep logo animation running while loading
             return
+        # Stop animation and show real data
+        if self._logo_anim_timer:
+            self._logo_anim_timer.stop()
+            self._logo_anim_timer = None
         self._render_content()
 
 
@@ -1990,15 +2069,15 @@ class Beacon(App):
         ("q", "quit", "Quit"),
         ("o", "restart_daemon", "Restart"),
         ("r", "refresh_all", "Refresh"),
-        ("s", "toggle_staking", "Staking"),
-        ("t", "cycle_theme", "Theme"),
-        ("c", "create_new_address", "New Address"),
+        Binding("s", "toggle_staking", "Toggle staking on/off", show=False),
+        Binding("t", "cycle_theme", "Rotate through theme color options", show=False),
+        ("c", "create_new_address", "Create new address"),
         ("p", "toggle_value_currency_card", "Currency"),
-        ("x", "toggle_send_card", "Send"),
-        ("w", "toggle_sweep_card", "Sweep"),
+        Binding("x", "toggle_send_card", "Create Send transaction", show=False),
+        Binding("w", "toggle_sweep_card", "Create Sweep transaction", show=False),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
-        ("l", "toggle_debug_log_card", "Debug Log"),
-        Binding("y", "toggle_peer_location", "Location", show=False),
+        ("l", "toggle_debug_log_card", "View live daemon debug log"),
+        Binding("y", "toggle_peer_location", "Toggle Peers view by IP or Location", show=False),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
 
@@ -2408,32 +2487,14 @@ class Beacon(App):
     #wallet-password-actions Button {
         margin-right: 1;
     }
+    #daemon-status-text {
+        link-color: $primary-lighten-2;
+        link-style: none;
+    }
     #daemon-status-container {
         layout: vertical;
         width: 100%;
         height: auto;
-    }
-    .electrumx-status-row {
-        layout: horizontal;
-        width: 100%;
-        height: auto;
-    }
-    .electrumx-label {
-        width: auto;
-        height: auto;
-    }
-    #electrumx-install-inline {
-        text-style: underline;
-        color: $accent-lighten-2;
-        width: auto;
-        height: auto;
-    }
-    #electrumx-install-inline:hover {
-        color: $accent-lighten-3;
-        background: $surface 10%;
-    }
-    #electrumx-install-inline:focus {
-        text-style: bold underline;
     }
     #firewall-status-line {
         padding-left: 1;
@@ -2545,6 +2606,11 @@ class Beacon(App):
         min-width: 0;
         text-wrap: nowrap;
         overflow: hidden;
+    }
+    #overview-network Static {
+        width: 100%;
+        height: 100%;
+        content-align: center middle;
     }
     """
 
@@ -2954,13 +3020,8 @@ class Beacon(App):
         self.set_timer(3.0, self._init_backup_card)
         self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
         self.set_timer(60.0, lambda: self.set_interval(300, self._check_backup_timer))
-        # Hidden command-palette entries for direct theme selection.
-        self.bind("ctrl+shift+o", "set_theme_deep_ocean", description="Deep Ocean", show=False)
-        self.bind("ctrl+shift+g", "set_theme_graphite_neon", description="Graphite Neon", show=False)
-        self.bind("ctrl+shift+w", "set_theme_warm_terminal", description="Warm Terminal", show=False)
-        self.bind("ctrl+shift+b", "set_theme_beacon_midnight", description="Beacon Midnight", show=False)
         # Keep 'z' binding active but hidden from footer (shown in header instead)
-        self.bind("z", "toggle_timezone_card", description="Timezone", show=False)
+        self.bind("z", "toggle_timezone_card", description="Change Timezone", show=False)
         self._sync_map_offset_binding()
         self._sync_restart_daemon_binding()
         self._sync_create_address_binding()
@@ -3175,6 +3236,10 @@ class Beacon(App):
             self._show_peer_location = True
             self.run_worker(self.refresh_data())
 
+    async def action_install_electrumx(self) -> None:
+        """Handle ElectrumX installation when Install link is clicked."""
+        await self._handle_electrum_install()
+
     def _set_timezone_card_active(self, active: bool) -> None:
         self._show_timezone_card = active
         self.timezone_card.display = active
@@ -3279,7 +3344,7 @@ class Beacon(App):
         if self._map_fullscreen_active:
             return
         if "l" not in self._bindings.key_to_bindings:
-            self.bind("l", "toggle_debug_log_card", description="Debug Log")
+            self.bind("l", "toggle_debug_log_card", description="View live daemon debug log")
             self.refresh_bindings()
 
     def _set_debug_log_card_visible(self, show_log: bool) -> None:
@@ -3729,10 +3794,6 @@ class Beacon(App):
                 pass
             return
 
-        if btn_id == "electrumx-install-inline":
-            await self._handle_electrum_install()
-            return
-
         if btn_id == "electrum-installer-btn":
             await self._handle_electrum_install()
             return
@@ -3816,28 +3877,16 @@ class Beacon(App):
             # Refresh displays to show new timezone
             await self.refresh_timezone()
 
-    async def on_click(self, event: events.Click) -> None:
-        """Handle clicks on Link widgets."""
-        # Check if the click is on a Link widget
-        if isinstance(event.widget, Link):
-            link_id = event.widget.id or ""
-
-            if link_id == "electrumx-install-inline":
-                event.stop()  # Prevent the link from trying to open a URL
-                await self._handle_electrum_install()
-                return
 
     async def on_key(self, event: events.Key) -> None:
         """Handle key presses for hidden hotkeys."""
         # Handle 'i' key for ElectrumX installation when the install link is visible
         if event.key == "i" and not self._show_electrum_card:
-            # Check if the install link is currently visible (via its container)
-            if hasattr(self, 'overview_daemon_status'):
-                electrumx_row = self.overview_daemon_status._electrumx_row
-                if electrumx_row.display:
-                    event.stop()
-                    await self._handle_electrum_install()
-                    return
+            # Check if the install link is currently visible
+            if hasattr(self, 'overview_daemon_status') and self.overview_daemon_status._showing_install_link:
+                event.stop()
+                await self._handle_electrum_install()
+                return
 
         # Handle 'j' key for ElectrumX log - available when:
         # 1. Management card is visible (to open log)
@@ -5415,32 +5464,15 @@ class Beacon(App):
             self._bindings.key_to_bindings.pop("c", None)
             self.refresh_bindings()
         elif self._daemon_status == "running" and not has_binding:
-            self.bind("c", "create_new_address", description="New Address")
+            self.bind("c", "create_new_address", description="Create new address")
             self.refresh_bindings()
 
     def _sync_electrum_binding(self) -> None:
-        """Show or hide the 'i' key for ElectrumX card based on whether it's installed."""
-        if self._map_fullscreen_active:
-            if "i" in self._bindings.key_to_bindings:
-                self._bindings.key_to_bindings.pop("i", None)
-            self.refresh_bindings()
-            return
-        installed = electrumx_service.is_electrumx_installed()
-        has_binding = "i" in self._bindings.key_to_bindings
-        # Only show the 'i' binding when ElectrumX is installed
-        if installed:
-            label = "ElectrumX"
-            if has_binding:
-                bindings_list = self._bindings.key_to_bindings.get("i")
-                if bindings_list:
-                    self._bindings.key_to_bindings["i"] = [
-                        dataclass_replace(b, description=label) for b in bindings_list
-                    ]
-            else:
-                self.bind("i", "toggle_electrum_card", description=label)
-        elif has_binding:
+        """Remove the 'i' key from footer bindings - it's now only a hidden hotkey."""
+        # Always remove 'i' from the footer if it exists
+        if "i" in self._bindings.key_to_bindings:
             self._bindings.key_to_bindings.pop("i", None)
-        self.refresh_bindings()
+            self.refresh_bindings()
 
     def _sync_electrumx_log_binding(self) -> None:
         """Remove the 'j' key from global bindings - it's now only available in ElectrumX Management card."""
@@ -5498,17 +5530,21 @@ class Beacon(App):
             return
         desired = {
             "r": ("refresh_all", "Refresh"),
-            "s": ("toggle_staking", "Staking"),
-            "t": ("cycle_theme", "Theme"),
+            "s": ("toggle_staking", "Toggle staking on/off"),
+            "t": ("cycle_theme", "Rotate through theme color options"),
             "p": ("toggle_value_currency_card", "Currency"),
-            "x": ("toggle_send_card", "Send"),
-            "w": ("toggle_sweep_card", "Sweep"),
-            "l": ("toggle_debug_log_card", "Debug Log"),
+            "x": ("toggle_send_card", "Create Send transaction"),
+            "w": ("toggle_sweep_card", "Create Sweep transaction"),
+            "l": ("toggle_debug_log_card", "View live daemon debug log"),
             "e": ("toggle_wallet_lock", self._wallet_binding_label()),
         }
         for key, (action, description) in desired.items():
             if key not in self._bindings.key_to_bindings:
-                self.bind(key, action, description=description)
+                # Hide the 's', 't', 'x', and 'w' keys from footer but keep them functional
+                if key in ("s", "t", "x", "w"):
+                    self.bind(key, action, description=description, show=False)
+                else:
+                    self.bind(key, action, description=description)
         self._sync_create_address_binding()
         self._sync_restart_daemon_binding()
         self._sync_electrum_binding()
