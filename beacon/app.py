@@ -5194,8 +5194,8 @@ class Beacon(App):
             if not self._showing_startup_splash:
                 if not staking_available:
                     # Keep the card visible but hide the subtitle value
-                    self.node_status_card.border_subtitle = ""
                     self.node_status_card._stop_animation()
+                    self.node_status_card.border_subtitle = ""
                     self.node_status_card.update_lines(node_status_lines)
                 else:
                     self.node_status_card.update_lines(node_status_lines, staking_status=staking_status)
