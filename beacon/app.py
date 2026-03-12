@@ -1217,20 +1217,21 @@ class AddressListPanel(VerticalScroll):
             available = 80
         fixed_w = addr_col_w + bal_col_w
         status_w = available - fixed_w
-        lines: list[str] = []
-        for addr, bal, status in entries:
+        markup_lines: list[str] = []
+        for i, (addr, bal, status) in enumerate(entries):
             if status_w > 0 and status:
                 st = status[:status_w]
             elif status_w <= 0:
                 st = ""
             else:
                 st = status
-            lines.append(f"{addr:<{addr_col_w}}{bal:>{bal_col_w}}  {st}")
-        texts = [
-            Text(line, style="dim" if i % 2 == 1 else "")
-            for i, line in enumerate(lines)
-        ]
-        self._content.update(Group(*texts))
+            # Make address clickable with [@click] markup
+            line = f"[@click='app.show_address_qr({i})']{addr:<{addr_col_w}}[/]{bal:>{bal_col_w}}  {st}"
+            if i % 2 == 1:
+                markup_lines.append(f"[dim]{line}[/dim]")
+            else:
+                markup_lines.append(line)
+        self._content.update("\n".join(markup_lines))
 
     def update_lines(
         self,
@@ -1783,6 +1784,78 @@ class ElectrumXDomainScreen(ModalScreen[str | None]):
             self.dismiss(domain if domain else None)
 
 
+class AddressQRScreen(ModalScreen[None]):
+    """Modal showing QR code for a wallet address."""
+
+    DEFAULT_CSS = """
+    AddressQRScreen {
+        align: center middle;
+    }
+    #qr-modal {
+        width: 40;
+        height: auto;
+        border: solid $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    #qr-title {
+        text-align: center;
+        padding-bottom: 1;
+        width: 100%;
+        height: auto;
+    }
+    #qr-code {
+        text-align: center;
+        width: 100%;
+        height: auto;
+        padding: 0;
+        border: none;
+        margin: 0;
+    }
+    #qr-address {
+        text-align: center;
+        padding-top: 1;
+        color: $text-muted;
+        width: 100%;
+        height: auto;
+    }
+    #qr-dismiss {
+        padding-top: 1;
+        text-align: center;
+        width: 100%;
+        height: auto;
+    }
+    """
+
+    def __init__(self, address: str) -> None:
+        super().__init__()
+        self._address = address
+
+    def compose(self) -> ComposeResult:
+        import io
+        import qrcode
+
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(self._address)
+        qr.make(fit=True)
+        # Capture ASCII QR code output
+        output = io.StringIO()
+        qr.print_ascii(out=output, invert=True, tty=False)
+        qr_str = output.getvalue().rstrip('\n')
+
+        with Container(id="qr-modal"):
+            yield Static("Wallet Address", id="qr-title")
+            yield Static(qr_str, id="qr-code")
+            yield Static(self._address, id="qr-address")
+            yield Static("[ press any key or click to close ]", id="qr-dismiss")
+
+    def on_key(self, event) -> None:
+        self.dismiss()
+
+    def on_click(self) -> None:
+        self.dismiss()
+
+
 class FirewallCard(VerticalScroll):
     """Settings card for managing the system firewall (UFW / firewalld)."""
 
@@ -2225,6 +2298,9 @@ class Beacon(App):
     }
     #overview-addresses .mission-content {
         text-align: center;
+    }
+    #overview-addresses .network-row-text {
+        link-style: none;
     }
     #overview-peers .mission-text {
         width: 100%;
@@ -3713,6 +3789,14 @@ class Beacon(App):
         except Exception:
             pass
 
+    def action_show_address_qr(self, idx: str) -> None:
+        """Show QR code modal for the address at the given index."""
+        try:
+            addr, _, _ = self.overview_addresses._addr_entries[int(idx)]
+            self.push_screen(AddressQRScreen(addr))
+        except (IndexError, ValueError):
+            pass
+
     async def _handle_send(self) -> None:
         """Handle Send button press: validate, call RPC, notify, refresh."""
         self._reset_send_idle_timer()
@@ -5108,11 +5192,12 @@ class Beacon(App):
 
         def _update_staking_card() -> None:
             if not self._showing_startup_splash:
-                # Hide staking card if no balance or addresses, otherwise show with status
                 if not staking_available:
-                    self.node_status_card.display = False
+                    # Keep the card visible but hide the subtitle value
+                    self.node_status_card.border_subtitle = ""
+                    self.node_status_card._stop_animation()
+                    self.node_status_card.update_lines(node_status_lines)
                 else:
-                    self.node_status_card.display = True
                     self.node_status_card.update_lines(node_status_lines, staking_status=staking_status)
 
         self._schedule_update(0.3, _update_staking_card)
