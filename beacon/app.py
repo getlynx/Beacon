@@ -1058,7 +1058,7 @@ class PeerListPanel(VerticalScroll):
         self.border_subtitle_align = ("left", "bottom")
         self.add_class("card")
         self.add_class(accent_class)
-        self._content = Static(_SPLASH_MISSION_TEXT, classes="network-row-text")
+        self._content = Static(_SPLASH_MISSION_TEXT, classes="mission-text")
         self._lines: list[tuple[str, int | None] | tuple[str, str, str, str, int | None]] = []
         self._blink_indices: set[int] = set()
         self._blink_visible = True
@@ -2068,7 +2068,7 @@ class Beacon(App):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("o", "restart_daemon", "Restart"),
-        ("r", "refresh_all", "Refresh"),
+        Binding("r", "refresh_all", "Refresh", show=False),
         Binding("s", "toggle_staking", "Toggle staking on/off", show=False),
         Binding("t", "cycle_theme", "Rotate through theme color options", show=False),
         ("c", "create_new_address", "Create new address"),
@@ -2225,6 +2225,12 @@ class Beacon(App):
     }
     #overview-addresses .mission-content {
         text-align: center;
+    }
+    #overview-peers .mission-text {
+        width: 100%;
+        height: 100%;
+        text-align: center;
+        content-align: center middle;
     }
     #send-card {
         height: 9;
@@ -2969,6 +2975,9 @@ class Beacon(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        # Initialize startup splash flag
+        self._showing_startup_splash = False
+
         # Hide selected built-in light themes from command palette/theme options.
         self.available_themes.pop("solarized-light", None)
         self.available_themes.pop("textual-light", None)
@@ -4270,6 +4279,52 @@ class Beacon(App):
         self.timezone_status.update("Refresh complete.")
         self.backup_card.refresh_state()
         self.header.reset_indicator()
+        # Show startup splash content for 5 seconds after refresh
+        self._show_startup_splash_for_duration(5.0)
+
+    def _show_startup_splash_for_duration(self, duration: float) -> None:
+        """Show startup splash content (logo, mission text) for specified duration."""
+        # Set flag FIRST to prevent any scheduled updates from firing
+        self._showing_startup_splash = True
+
+        # Show animated logo in Network Activity card - render first frame immediately
+        self.overview_network._logo_anim_frame = 0
+        if self.overview_network._logo_anim_timer:
+            self.overview_network._logo_anim_timer.stop()
+        # Render the first frame immediately before starting animation
+        self.overview_network._logo_tick()
+        self.overview_network._logo_anim_timer = self.set_interval(0.1, self.overview_network._logo_tick)
+
+        # Show mission text in Peers card
+        from rich.text import Text
+        mission_text = Text(_SPLASH_MISSION_TEXT, justify="center")
+        self.overview_peers._content.update(mission_text)
+
+        # Show mission text in Addresses card
+        self.overview_addresses.add_class("addresses-mission-mode")
+        self.overview_addresses._content.remove_class("network-row-text")
+        self.overview_addresses._content.add_class("mission-content")
+        self.overview_addresses._content.update(MISSION_TEXT)
+
+        # Stop any timer that might be hiding the splash content
+        if hasattr(self, '_splash_hide_timer') and self._splash_hide_timer:
+            self._splash_hide_timer.stop()
+
+        # Set timer to hide splash and restore normal content after duration
+        self._splash_hide_timer = self.set_timer(duration, self._hide_startup_splash)
+
+    def _hide_startup_splash(self) -> None:
+        """Hide startup splash and restore normal card content."""
+        # Clear the flag
+        self._showing_startup_splash = False
+
+        # Stop logo animation
+        if self.overview_network._logo_anim_timer:
+            self.overview_network._logo_anim_timer.stop()
+            self.overview_network._logo_anim_timer = None
+
+        # Trigger refresh to restore normal content
+        self.run_worker(self.refresh_data())
 
     def action_cycle_theme(self) -> None:
         """Cycle through available themes (t key)."""
@@ -4977,17 +5032,19 @@ class Beacon(App):
             self._sync_wallet_binding()
         self.difficulty_chart.set_syncing(is_syncing)
         self._is_synced = not is_syncing
-        self._schedule_update(
-            0.1,
-            lambda: self.overview_network.update_entries(
-                network_entries,
-                count=50,
-                time_since_latest=time_since,
-                difficulties=difficulty_data if difficulty_data else None,
-                syncing=is_syncing,
-            ),
-        )
+        def _update_network_card() -> None:
+            if not self._showing_startup_splash:
+                self.overview_network.update_entries(
+                    network_entries,
+                    count=50,
+                    time_since_latest=time_since,
+                    difficulties=difficulty_data if difficulty_data else None,
+                    syncing=is_syncing,
+                )
+        self._schedule_update(0.1, _update_network_card)
         def _update_peers_card() -> None:
+            if self._showing_startup_splash:
+                return
             if self._show_peer_location:
                 self.overview_peers.border_subtitle = (
                     "[@click='app.toggle_peer_location']"
@@ -5022,16 +5079,16 @@ class Beacon(App):
         if not self._map_log_default_set:
             self._map_log_default_set = True
             self._set_debug_log_card_visible(self._daemon_status != "running")
-        self._schedule_update(
-            0.3,
-            lambda: self.overview_addresses.update_lines(
-                addr_list,
-                address_count=address_count,
-                wallet_balance=data.get("wallet_balance"),
-                daemon_status=self._daemon_status,
-                wallet_info=data.get("wallet_info"),
-            ),
-        )
+        def _update_addresses_card() -> None:
+            if not self._showing_startup_splash:
+                self.overview_addresses.update_lines(
+                    addr_list,
+                    address_count=address_count,
+                    wallet_balance=data.get("wallet_balance"),
+                    daemon_status=self._daemon_status,
+                    wallet_info=data.get("wallet_info"),
+                )
+        self._schedule_update(0.3, _update_addresses_card)
         self._sync_create_address_binding()
         self._sync_electrum_binding()
         self._schedule_update(0.3, lambda: self.overview_mempool.update_lines(mempool_lines))
