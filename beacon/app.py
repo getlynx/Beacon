@@ -1182,6 +1182,8 @@ MISSION_TEXT = (
 class AddressListPanel(VerticalScroll):
     """Addresses card with colored row layout."""
 
+    can_focus = True
+
     def __init__(self, title: str, accent_class: str, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self.title = title
@@ -1196,6 +1198,7 @@ class AddressListPanel(VerticalScroll):
         self._loaded = False
         self._addr_entries: list[tuple[str, str, str]] = []
         self._content = Static(MISSION_TEXT, classes="mission-content")
+        self._cursor_index: int | None = None
 
     def compose(self) -> ComposeResult:
         with CenterMiddle(id="addresses-mission-wrapper"):
@@ -1227,7 +1230,10 @@ class AddressListPanel(VerticalScroll):
                 st = status
             # Make address clickable with [@click] markup
             line = f"[@click='app.show_address_qr({i})']{addr:<{addr_col_w}}[/]{bal:>{bal_col_w}}  {st}"
-            if i % 2 == 1:
+            if i == self._cursor_index:
+                # Highlight the cursor row with reverse video
+                markup_lines.append(f"[reverse]{line}[/reverse]")
+            elif i % 2 == 1:
                 markup_lines.append(f"[dim]{line}[/dim]")
             else:
                 markup_lines.append(line)
@@ -1314,6 +1320,41 @@ class AddressListPanel(VerticalScroll):
             else:
                 status = "Trusted"
             self._addr_entries.append((addr, bal, status))
+        self._render_addresses()
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle arrow keys and Enter for keyboard navigation."""
+        if not self._addr_entries:
+            return
+        n = len(self._addr_entries)
+        if event.key == "up":
+            event.stop()
+            self._cursor_index = (self._cursor_index or 0) - 1
+            self._cursor_index = max(0, self._cursor_index)
+            self._render_addresses()
+        elif event.key == "down":
+            event.stop()
+            self._cursor_index = (self._cursor_index if self._cursor_index is not None else -1) + 1
+            self._cursor_index = min(n - 1, self._cursor_index)
+            self._render_addresses()
+        elif event.key == "enter" and self._cursor_index is not None:
+            event.stop()
+            self.app.action_show_address_qr(str(self._cursor_index))
+        elif event.key == "escape":
+            event.stop()
+            self._cursor_index = None
+            self._render_addresses()
+            self.blur()
+
+    def on_focus(self) -> None:
+        """Set initial cursor on focus."""
+        if self._addr_entries and self._cursor_index is None:
+            self._cursor_index = 0
+            self._render_addresses()
+
+    def on_blur(self) -> None:
+        """Clear cursor when focus is lost."""
+        self._cursor_index = None
         self._render_addresses()
 
 
@@ -2295,6 +2336,9 @@ class Beacon(App):
         height: 1fr;
         scrollbar-visibility: visible;
         scrollbar-gutter: stable;
+    }
+    #overview-addresses:focus {
+        border: tall $accent;
     }
     #overview-addresses #addresses-mission-wrapper {
         height: auto;
