@@ -1853,6 +1853,13 @@ class AddressQRScreen(ModalScreen[None]):
     def on_key(self, event) -> None:
         self.dismiss()
 
+    def on_click(self, event) -> None:
+        """Dismiss modal when clicking on the overlay (outside the modal)."""
+        # Only dismiss if the click is on the ModalScreen itself (overlay),
+        # not on child widgets (modal content)
+        if event.control is self:
+            self.dismiss()
+
 
 class FirewallCard(VerticalScroll):
     """Settings card for managing the system firewall (UFW / firewalld)."""
