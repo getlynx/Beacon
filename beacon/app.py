@@ -4535,6 +4535,15 @@ class Beacon(App):
             else:
                 new_state = False
 
+            if new_state and not self._staking_available:
+                self.notify(
+                    "Cannot enable staking: no balance or addresses",
+                    title="Staking",
+                    severity="warning",
+                    timeout=3,
+                )
+                return
+
             if new_state:
                 status = await asyncio.get_event_loop().run_in_executor(
                     None, self.rpc.get_wallet_encryption_status
@@ -5235,6 +5244,14 @@ class Beacon(App):
         has_addresses = len(addr_list) > 0 if addr_list else False
         self._staking_available = wallet_balance > 0 and has_addresses
         staking_available = self._staking_available
+
+        # Auto-disable staking on daemon when not available
+        if not staking_available and self._staking_enabled is True:
+            result = await asyncio.get_event_loop().run_in_executor(
+                None, self.rpc.set_staking, False
+            )
+            if result == "false" or result is False:
+                self._staking_enabled = False
 
         # Set staking status
         staking_status = (
