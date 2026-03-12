@@ -1853,9 +1853,6 @@ class AddressQRScreen(ModalScreen[None]):
     def on_key(self, event) -> None:
         self.dismiss()
 
-    def on_click(self) -> None:
-        self.dismiss()
-
 
 class FirewallCard(VerticalScroll):
     """Settings card for managing the system firewall (UFW / firewalld)."""
