@@ -10,6 +10,7 @@ dependencies = [
   "pyproj>=3.0.0",
   "shapely>=2.0.0",
   "packaging>=21.0",
+  "qrcode>=7.0",
 ]
  
  [build-system]
