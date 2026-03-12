@@ -1851,6 +1851,8 @@ class AddressQRScreen(ModalScreen[None]):
             yield Static("[ press any key or click to close ]", id="qr-dismiss")
 
     def on_key(self, event) -> None:
+        """Close modal on any key press, preventing the key from propagating."""
+        event.stop()  # Prevent key from triggering hotkeys in parent screen
         self.dismiss()
 
     def on_click(self, event) -> None:
