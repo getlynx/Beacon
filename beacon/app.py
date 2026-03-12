@@ -1796,11 +1796,11 @@ class AddressQRScreen(ModalScreen[None]):
         height: auto;
         border: solid $primary;
         background: $surface;
-        padding: 1 2;
+        padding: 0 2;
     }
     #qr-title {
         text-align: center;
-        padding-bottom: 1;
+        padding-bottom: 0;
         width: 100%;
         height: auto;
     }
@@ -1820,7 +1820,7 @@ class AddressQRScreen(ModalScreen[None]):
         height: auto;
     }
     #qr-dismiss {
-        padding-top: 1;
+        padding-top: 0;
         text-align: center;
         width: 100%;
         height: auto;
@@ -1845,7 +1845,7 @@ class AddressQRScreen(ModalScreen[None]):
         qr_str = output.getvalue().rstrip('\n')
 
         with Container(id="qr-modal"):
-            yield Static(f"Wallet Address ({self._chain_name})", id="qr-title")
+            yield Static(f"{self._chain_name} Address", id="qr-title")
             yield Static(qr_str, id="qr-code")
             yield Static(self._address, id="qr-address")
             yield Static("[ press any key or click to close ]", id="qr-dismiss")
@@ -3795,11 +3795,8 @@ class Beacon(App):
         """Show QR code modal for the address at the given index."""
         try:
             addr, _, _ = self.overview_addresses._addr_entries[int(idx)]
-            chain_name = "Bitcoin"  # default
-            blockchain_info = self.rpc._safe_call("getblockchaininfo")
-            if isinstance(blockchain_info, dict):
-                chain_name = blockchain_info.get("chain", "Bitcoin").title()
-            self.push_screen(AddressQRScreen(addr, chain_name))
+            node_name = self._node_name or "Bitcoin"
+            self.push_screen(AddressQRScreen(addr, node_name))
         except (IndexError, ValueError):
             pass
 
