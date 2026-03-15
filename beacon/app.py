@@ -3573,9 +3573,20 @@ class Beacon(App):
             )
 
     def action_show_electrumx_log(self) -> None:
-        """Show ElectrumX log (bound to i hotkey when ElectrumX is running, and clickable 'running' text)."""
-        if not self._show_electrumx_log_card:
-            # Open ElectrumX log if not already visible
+        """Toggle ElectrumX log (bound to i hotkey when ElectrumX is running, and clickable 'running' text)."""
+        if self._show_electrumx_log_card:
+            # Close ElectrumX log and restore peer map
+            self._show_electrumx_log_card = False
+            self._electrumx_log_revert_at = None
+            if self._electrumx_log_revert_timer:
+                self._electrumx_log_revert_timer.stop()
+                self._electrumx_log_revert_timer = None
+            self.peer_map.display = True
+            self.debug_log_card.display = self._show_debug_log_card
+            self.electrumx_log_card.display = False
+            self.electrumx_log_card.border_subtitle = "journalctl -u electrumx -n 30"
+        else:
+            # Open ElectrumX log
             if self._debug_log_revert_timer:
                 self._debug_log_revert_timer.stop()
                 self._debug_log_revert_timer = None
