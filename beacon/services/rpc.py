@@ -361,6 +361,70 @@ class RpcClient:
         except Exception:
             return False
 
+    def count_block_transactions_and_shards(self, block_hash: str) -> tuple[int, int]:
+        """Count regular transactions and shards (op_return outputs) in a block.
+        
+        In PoS blocks:
+        - First tx (index 0) is generation/coinbase
+        - Second tx (index 1) is coinstake  
+        - Transactions from index 2+ are data transactions
+        
+        Returns (tx_count, shard_count) where:
+        - tx_count: number of data transactions (index 2+) that have non-op_return outputs
+        - shard_count: total number of op_return vouts across all data transactions
+        """
+        try:
+            # Get block with verbosity 2 to include full transaction details
+            block = self.getblock(block_hash, 2)
+            if not block or not isinstance(block, dict):
+                return (0, 0)
+            
+            tx_list = block.get("tx")
+            if not isinstance(tx_list, list) or len(tx_list) < 3:
+                # Need at least 3 transactions (generation, coinstake, and data tx)
+                return (0, 0)
+            
+            tx_count = 0
+            shard_count = 0
+            
+            # Process transactions from index 2 onwards (data transactions)
+            for tx in tx_list[2:]:
+                if not isinstance(tx, dict):
+                    continue
+                
+                vout = tx.get("vout", [])
+                if not isinstance(vout, list):
+                    continue
+                
+                has_regular_output = False
+                op_return_count = 0
+                
+                # Analyze all outputs in this transaction
+                for output in vout:
+                    if not isinstance(output, dict):
+                        continue
+                    script_pubkey = output.get("scriptPubKey")
+                    if not isinstance(script_pubkey, dict):
+                        continue
+                    
+                    script_type = script_pubkey.get("type")
+                    if script_type == "nulldata":  # op_return is type "nulldata"
+                        op_return_count += 1
+                    else:
+                        has_regular_output = True
+                
+                # Count this as a regular transaction if it has any non-op_return output
+                if has_regular_output:
+                    tx_count += 1
+                
+                # Add all op_return outputs to shard count
+                shard_count += op_return_count
+            
+            return (tx_count, shard_count)
+            
+        except Exception:
+            return (0, 0)
+
     def get_backup_dir(self) -> str:
         """Return the backup directory: /var/lib/{chain-name}-backup/."""
         chain_id = self._get_chain_id()

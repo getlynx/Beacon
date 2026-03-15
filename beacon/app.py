@@ -1361,16 +1361,17 @@ class AddressListPanel(VerticalScroll):
         self._render_addresses()
 
 
-# Network Activity column widths: height=7, hash=4, delta=7, empty_marker=13, diff=6
+# Network Activity column widths: height=7, hash=4, delta=7, tx=6, shards=6, diff=6
 _NETWORK_HEIGHT_W = 7
 _NETWORK_HASH_W = 4
 _NETWORK_DELTA_W = 7
-_NETWORK_EMPTY_W = 13
+_NETWORK_TX_W = 6
+_NETWORK_SHARDS_W = 6
 _NETWORK_DIFF_W = 6
 _NETWORK_FIXED_TOTAL = (
     _NETWORK_HEIGHT_W + _NETWORK_HASH_W + _NETWORK_DELTA_W
-    + _NETWORK_EMPTY_W + _NETWORK_DIFF_W + 10
-)  # +10 for 5 gaps of 2 spaces
+    + _NETWORK_TX_W + _NETWORK_SHARDS_W + _NETWORK_DIFF_W + 12
+)  # +12 for 6 gaps of 2 spaces
 
 
 class NetworkActivityPanel(VerticalScroll):
@@ -1383,7 +1384,7 @@ class NetworkActivityPanel(VerticalScroll):
         self.add_class(accent_class)
         self._content = Static("", classes="network-row-text")
         self._heights: list[int] = []
-        self._raw_entries: list[tuple[int, str, str, str, str]] = []
+        self._raw_entries: list[tuple[int, str, str, str, str, int, int]] = []
         self._difficulties: list[float] | None = None
         self._syncing = False
         self._logo_anim_frame: int = 0
@@ -1422,19 +1423,24 @@ class NetworkActivityPanel(VerticalScroll):
         fixed_total = _NETWORK_FIXED_TOTAL if show_diff else (_NETWORK_FIXED_TOTAL - _NETWORK_DIFF_W - 2)
         time_width = max(8, width - fixed_total)
         lines = []
-        for i, (height, hash_short, time_display, delta_display, empty_marker) in enumerate(
+        for i, (height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count) in enumerate(
             self._raw_entries
         ):
             time_trunc = (
                 time_display[-time_width:] if len(time_display) > time_width
                 else time_display
             )
+            # Format tx and shard counts
+            tx_str = f"{tx_count} tx" if tx_count > 0 else "-"
+            shard_str = f"{shard_count} sx" if shard_count > 0 else "-"
+            
             left = (
                 f"{height:>{_NETWORK_HEIGHT_W}}  "
                 f"{hash_short:<{_NETWORK_HASH_W}}  "
                 f"{time_trunc:<{time_width}}  "
                 f"{delta_display:<{_NETWORK_DELTA_W}}  "
-                f"{empty_marker:<{_NETWORK_EMPTY_W}}"
+                f"{tx_str:>{_NETWORK_TX_W}}  "
+                f"{shard_str:>{_NETWORK_SHARDS_W}}"
             )
             if show_diff:
                 if self._difficulties is not None and i < len(self._difficulties):
@@ -1456,7 +1462,7 @@ class NetworkActivityPanel(VerticalScroll):
 
     def update_entries(
         self,
-        entries: list[tuple[int, str, str, str, str]],
+        entries: list[tuple[int, str, str, str, str, int, int]],
         count: int | None = None,
         time_since_latest: str | None = None,
         difficulties: list[float] | None = None,
@@ -4826,6 +4832,24 @@ class Beacon(App):
 
         network_entries, latest_block_time, tz_name = self.logs.get_update_tip_entries(50)
 
+        # Fetch tx and shard counts for each block
+        def _fetch_tx_and_shard_counts() -> list[tuple[int, str, str, str, str, int, int]]:
+            enhanced_entries = []
+            for entry in network_entries:
+                if len(entry) >= 5:
+                    height, hash_short, hash_full, time_display, delta_display = entry
+                    if hash_full and hash_full != "-" and len(hash_full) > 8:
+                        tx_count, shard_count = self.rpc.count_block_transactions_and_shards(hash_full)
+                    else:
+                        tx_count, shard_count = 0, 0
+                    enhanced_entries.append((height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count))
+                else:
+                    # Fallback for malformed entries
+                    enhanced_entries.append((entry[0], entry[1], entry[2] if len(entry) > 2 else "-", entry[3] if len(entry) > 3 else "-", "-", 0, 0))
+            return enhanced_entries
+        
+        network_entries_with_counts = await asyncio.get_event_loop().run_in_executor(None, _fetch_tx_and_shard_counts)
+
         peer_rows: list[tuple[int, str, str, str, str, dict]] = []
         for peer in peer_info:
             if not isinstance(peer, dict):
@@ -5221,7 +5245,7 @@ class Beacon(App):
         def _update_network_card() -> None:
             if not self._showing_startup_splash:
                 self.overview_network.update_entries(
-                    network_entries,
+                    network_entries_with_counts,
                     count=50,
                     time_since_latest=time_since,
                     difficulties=difficulty_data if difficulty_data else None,

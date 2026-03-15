@@ -94,7 +94,7 @@ class LogTailer:
             if height in seen:
                 continue
             seen.add(height)
-            entries.append((height, hash_short, time_display, parsed_time, tx_count))
+            entries.append((height, hash_short, hash_value, time_display, parsed_time, tx_count))
             if len(entries) >= 200:
                 break
 
@@ -102,19 +102,20 @@ class LogTailer:
             return ([(0, "-", "No UpdateTip entries.", "-", "-")], None, "")
 
         entries.sort(key=lambda item: item[0], reverse=True)
-        latest_time = entries[0][3] if entries else None
+        latest_time = entries[0][4] if entries else None
         tz_name = ""
         if latest_time and latest_time.tzinfo:
             tz_name = latest_time.strftime("%Z") or str(latest_time.tzinfo)
         result_lines: list[tuple[int, str, str, str, str]] = []
         max_items = min(limit, len(entries))
         for index in range(max_items):
-            height, hash_short, time_display, parsed_time, tx_count = entries[index]
+            height, hash_short, hash_value, time_display, parsed_time, tx_count = entries[index]
             delta_display = "-"
-            empty_marker = ""
+            # Trim year from time display (remove "YYYY-" prefix)
+            if time_display and len(time_display) > 5 and time_display[4:5] == "-":
+                time_display = time_display[5:]  # Remove "YYYY-"
             if index + 1 < len(entries):
-                next_time = entries[index + 1][3]
-                next_tx = entries[index + 1][4]
+                next_time = entries[index + 1][4]
                 if parsed_time and next_time:
                     delta_seconds = int((parsed_time - next_time).total_seconds())
                     if delta_seconds < 0:
@@ -124,15 +125,7 @@ class LogTailer:
                         delta_display = f"{minutes}m {seconds}s"
                     else:
                         delta_display = f"{seconds}s"
-                if tx_count is not None and next_tx is not None:
-                    if next_tx == tx_count - 2:
-                        empty_marker = "empty"
-                    else:
-                        diff = abs(tx_count - next_tx) - 2
-                        if diff < 0:
-                            diff = 0
-                        empty_marker = f"{diff} tx"
-            result_lines.append((height, hash_short, time_display, delta_display, empty_marker))
+            result_lines.append((height, hash_short, hash_value, time_display, delta_display))
         return (result_lines, latest_time, tz_name)
 
     def get_latest_block_statistics(self) -> str:
