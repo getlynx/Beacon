@@ -306,6 +306,61 @@ class RpcClient:
             return result
         return None
 
+    def is_block_staked_by_wallet(self, block_hash: str) -> bool:
+        """Check if a block was staked by an address in our wallet.
+        
+        In PoS blocks, the second transaction (index 1) is the coinstake transaction.
+        We check if any output address from that transaction belongs to our wallet.
+        Returns True if this wallet staked the block, False otherwise.
+        """
+        try:
+            # Get block with verbosity 2 to include full transaction details
+            block = self.getblock(block_hash, 2)
+            if not block or not isinstance(block, dict):
+                return False
+            
+            tx_list = block.get("tx")
+            if not isinstance(tx_list, list) or len(tx_list) < 2:
+                return False
+            
+            # Second transaction is the coinstake transaction in PoS blocks
+            coinstake_tx = tx_list[1]
+            if not isinstance(coinstake_tx, dict):
+                return False
+            
+            # Extract addresses from vout
+            vout = coinstake_tx.get("vout", [])
+            if not isinstance(vout, list):
+                return False
+            
+            stake_addresses = set()
+            for output in vout:
+                if not isinstance(output, dict):
+                    continue
+                script_pubkey = output.get("scriptPubKey")
+                if not isinstance(script_pubkey, dict):
+                    continue
+                addresses = script_pubkey.get("addresses", [])
+                if isinstance(addresses, list):
+                    stake_addresses.update(addresses)
+                # Some implementations use 'address' (singular) instead
+                address = script_pubkey.get("address")
+                if isinstance(address, str):
+                    stake_addresses.add(address)
+            
+            if not stake_addresses:
+                return False
+            
+            # Check if any of these addresses belong to our wallet
+            wallet_addresses = self._safe_call("listreceivedbyaddress", [0, True]) or []
+            wallet_address_set = {addr["address"] for addr in wallet_addresses if isinstance(addr, dict) and "address" in addr}
+            
+            # If any stake address is in our wallet, we staked this block
+            return bool(stake_addresses & wallet_address_set)
+            
+        except Exception:
+            return False
+
     def get_backup_dir(self) -> str:
         """Return the backup directory: /var/lib/{chain-name}-backup/."""
         chain_id = self._get_chain_id()

@@ -201,7 +201,7 @@ class LogTailer:
         floor = max(0, update_tip_index - search_back_lines)
         for idx in range(update_tip_index - 1, floor - 1, -1):
             line = lines[idx]
-            if "CheckStake" not in line:
+            if "CheckStake(): New proof-of-stake block found" not in line:
                 continue
             parsed = self._parse_line_timestamp_local(line)
             if parsed is not None:

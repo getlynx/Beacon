@@ -3820,20 +3820,18 @@ class Beacon(App):
             blink_indices=blink_indices,
         )
 
-    def _maybe_notify_schrodinger_block(self, block_height: int | None, block_hash: str | None) -> None:
-        """Notify local block discovery; use Schrödinger toast when startup window matches."""
-        if block_height is None or block_height in self._local_block_event_notified:
+    def _notify_staked_block(self, block_height: int, block_hash: str) -> None:
+        """Notify when this wallet staked a block (verified via blockchain data)."""
+        if block_height in self._local_block_event_notified:
             return
-        checkstake_ts = self.logs.find_latest_checkstake_before_updatetip(
-            height=block_height,
-            block_hash=block_hash,
-        )
-        if checkstake_ts is None:
-            return
+        
         self._local_block_event_notified.add(block_height)
-        elapsed = (checkstake_ts - self._session_started_at_local).total_seconds()
         self.header.set_indicator("lightning")
-        if 0 <= elapsed <= 30:
+        
+        # Calculate elapsed time since session start for Schrödinger block detection
+        elapsed = (datetime.now(timezone.utc).astimezone() - self._session_started_at_local).total_seconds()
+        
+        if 0 <= elapsed <= 30 and block_height not in self._schrodinger_block_notified:
             self.notify(
                 "You've won a Schrödinger Block. This is very unusual. It only happens when you log into your Beacon session, and your staking node immediately wins a stake on the network. Congratulations!!! Curious, do you have a cat?",
                 title=f"{E('⚡', '!')} Schrodinger Block",
@@ -3841,13 +3839,13 @@ class Beacon(App):
                 timeout=12,
             )
             self._schrodinger_block_notified.add(block_height)
-            return
-        self.notify(
-            "Your local node discovered a new proof-of-stake block.",
-            title=f"{E('⚡', '!')} Local Block Found",
-            severity="information",
-            timeout=8,
-        )
+        else:
+            self.notify(
+                "Your wallet staked a new proof-of-stake block!",
+                title=f"{E('⚡', '!')} Block Staked",
+                severity="information",
+                timeout=8,
+            )
 
     def action_toggle_map_center(self) -> None:
         """Toggle map view between default (Americas west) and centered on node (m key)."""
@@ -5398,10 +5396,9 @@ class Beacon(App):
                                     h_int = int(h)
                                 except (TypeError, ValueError):
                                     h_int = bh
-                                self._maybe_notify_schrodinger_block(
-                                    h_int,
-                                    hsh if isinstance(hsh, str) else best_hash,
-                                )
+                                # Check if this block was staked by our wallet
+                                if self.rpc.is_block_staked_by_wallet(best_hash):
+                                    self._notify_staked_block(h_int, best_hash)
                                 pos_diff = _extract_pos_difficulty(block.get("difficulty"))
                                 self.difficulty_chart.update_difficulty(pos_diff, prepend=True)
                             else:
@@ -5410,11 +5407,13 @@ class Beacon(App):
                                     title="New block",
                                     timeout=15,
                                 )
-                                self._maybe_notify_schrodinger_block(bh, best_hash)
+                                # Check if this block was staked by our wallet
+                                if self.rpc.is_block_staked_by_wallet(best_hash):
+                                    self._notify_staked_block(bh, best_hash)
                         self.call_later(_fetch_and_notify)
                     else:
                         self.notify(f"Height {bh}", title="New block", timeout=15)
-                        self._maybe_notify_schrodinger_block(bh, None)
+                        # Note: Cannot check staking without block hash
             
             # Update staking status on card: use tracked state if available, otherwise show sync state
             # Only show subtitle when staking is available (wallet has balance and addresses)
