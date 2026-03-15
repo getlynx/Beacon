@@ -380,8 +380,11 @@ class RpcClient:
                 return (0, 0)
             
             tx_list = block.get("tx")
-            if not isinstance(tx_list, list) or len(tx_list) < 3:
-                # Need at least 3 transactions (generation, coinstake, and data tx)
+            if not isinstance(tx_list, list):
+                return (0, 0)
+            
+            # Blocks with only generation + coinstake (no data txs) should return (0, 0)
+            if len(tx_list) < 3:
                 return (0, 0)
             
             tx_count = 0
@@ -397,7 +400,7 @@ class RpcClient:
                     continue
                 
                 has_regular_output = False
-                op_return_count = 0
+                tx_op_return_count = 0
                 
                 # Analyze all outputs in this transaction
                 for output in vout:
@@ -409,7 +412,7 @@ class RpcClient:
                     
                     script_type = script_pubkey.get("type")
                     if script_type == "nulldata":  # op_return is type "nulldata"
-                        op_return_count += 1
+                        tx_op_return_count += 1
                     else:
                         has_regular_output = True
                 
@@ -417,12 +420,15 @@ class RpcClient:
                 if has_regular_output:
                     tx_count += 1
                 
-                # Add all op_return outputs to shard count
-                shard_count += op_return_count
+                # Add all op_return outputs from this tx to total shard count
+                shard_count += tx_op_return_count
             
             return (tx_count, shard_count)
             
-        except Exception:
+        except Exception as e:
+            # Log the exception for debugging but don't crash
+            import sys
+            print(f"Error counting tx/shards for block {block_hash[:8]}: {e}", file=sys.stderr)
             return (0, 0)
 
     def get_backup_dir(self) -> str:

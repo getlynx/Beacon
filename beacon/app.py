@@ -4,6 +4,7 @@ import platform
 import random
 import re
 import subprocess
+import sys
 import time
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
@@ -4839,7 +4840,11 @@ class Beacon(App):
                 if len(entry) >= 5:
                     height, hash_short, hash_full, time_display, delta_display = entry
                     if hash_full and hash_full != "-" and len(hash_full) > 8:
-                        tx_count, shard_count = self.rpc.count_block_transactions_and_shards(hash_full)
+                        try:
+                            tx_count, shard_count = self.rpc.count_block_transactions_and_shards(hash_full)
+                        except Exception as e:
+                            print(f"Error fetching counts for block {height}: {e}", file=sys.stderr)
+                            tx_count, shard_count = 0, 0
                     else:
                         tx_count, shard_count = 0, 0
                     enhanced_entries.append((height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count))
