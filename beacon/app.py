@@ -480,8 +480,11 @@ class DaemonStatusCard(VerticalScroll):
             # Handled by 'i' hotkey
             all_lines.append(f"{'ElectrumX Status':<{self.COL}} [@click='app.install_electrumx']Install[/]")
         elif electrumx_label:
-            # Add ElectrumX status as plain text
-            all_lines.append(f"{'ElectrumX Status':<{self.COL}} {electrumx_label}")
+            # Add ElectrumX status - make 'running' clickable to show log (also via 'i' hotkey)
+            if electrumx_label == "running":
+                all_lines.append(f"{'ElectrumX Status':<{self.COL}} [@click='app.show_electrumx_log']{electrumx_label}[/]")
+            else:
+                all_lines.append(f"{'ElectrumX Status':<{self.COL}} {electrumx_label}")
 
         # Build text with alternating colors using markup
         formatted_lines = []
@@ -3569,6 +3572,29 @@ class Beacon(App):
                 self.ELECTRUMX_LOG_REVERT_SECONDS, self._revert_electrumx_log_to_peer_map
             )
 
+    def action_show_electrumx_log(self) -> None:
+        """Show ElectrumX log (bound to i hotkey when ElectrumX is running, and clickable 'running' text)."""
+        if not self._show_electrumx_log_card:
+            # Open ElectrumX log if not already visible
+            if self._debug_log_revert_timer:
+                self._debug_log_revert_timer.stop()
+                self._debug_log_revert_timer = None
+            self._debug_log_revert_at = None
+            self._show_debug_log_card = False
+            self._show_electrumx_log_card = True
+            self.peer_map.display = False
+            self.debug_log_card.display = False
+            self.electrumx_log_card.display = True
+            self.electrumx_log_card._scroll_to_bottom_on_next_refresh = True
+            self.electrumx_log_card._refresh_lines()
+            # Start 5-minute timer to revert to Peer Map
+            self._electrumx_log_revert_at = time.monotonic() + self.ELECTRUMX_LOG_REVERT_SECONDS
+            if self._electrumx_log_revert_timer:
+                self._electrumx_log_revert_timer.stop()
+            self._electrumx_log_revert_timer = self.set_timer(
+                self.ELECTRUMX_LOG_REVERT_SECONDS, self._revert_electrumx_log_to_peer_map
+            )
+
     def action_toggle_electrum_card(self) -> None:
         """Toggle between Network Activity and ElectrumX Installer or Management card (bound to i)."""
         if self._show_electrum_card:
@@ -4032,6 +4058,11 @@ class Beacon(App):
             if hasattr(self, 'overview_daemon_status') and self.overview_daemon_status._showing_install_link:
                 event.stop()
                 await self._handle_electrum_install()
+                return
+            # If ElectrumX is installed and running, show the ElectrumX log
+            elif electrumx_service.is_electrumx_installed():
+                event.stop()
+                self.action_show_electrumx_log()
                 return
 
         # Handle 'j' key for ElectrumX log - available when:
