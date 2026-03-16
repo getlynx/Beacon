@@ -3176,12 +3176,18 @@ class Beacon(App):
         self.status_bar.refresh()
         self.status_bar.refresh()
 
-        # Initialize staking state from config file
-        staking_from_config = await asyncio.get_event_loop().run_in_executor(
-            None, self.rpc.get_staking_enabled_from_config
+        # Initialize staking state from daemon (preferred) or config file (fallback)
+        staking_from_daemon = await asyncio.get_event_loop().run_in_executor(
+            None, self.rpc.get_staking_status
         )
-        if staking_from_config is not None:
-            self._staking_enabled = staking_from_config
+        if staking_from_daemon is not None:
+            self._staking_enabled = staking_from_daemon
+        else:
+            staking_from_config = await asyncio.get_event_loop().run_in_executor(
+                None, self.rpc.get_staking_enabled_from_config
+            )
+            if staking_from_config is not None:
+                self._staking_enabled = staking_from_config
         
         self.set_timer(0.6, self.refresh_node_version)
         self.set_timer(0.1, self.refresh_data)
@@ -5394,10 +5400,19 @@ class Beacon(App):
         else:
             new_lock_state = "unlocked"
         if new_lock_state != self._wallet_lock_state:
+            old_lock_state = self._wallet_lock_state
             self._wallet_lock_state = new_lock_state
             if new_lock_state != "unlocked":
                 self._wallet_unlock_purpose = None
             self._sync_wallet_binding()
+            # When wallet transitions to locked, disable staking
+            if new_lock_state == "locked" and old_lock_state != "locked":
+                async def _disable_staking_on_lock() -> None:
+                    await asyncio.get_event_loop().run_in_executor(None, self.rpc.set_staking, False)
+                    self._staking_enabled = False
+                    self.node_status_card.update_staking_status("disabled")
+                    self.notify("Staking disabled (wallet locked)", title="Staking", timeout=3)
+                asyncio.create_task(_disable_staking_on_lock())
         self.difficulty_chart.set_syncing(is_syncing)
         self._is_synced = not is_syncing
         def _update_network_card() -> None:

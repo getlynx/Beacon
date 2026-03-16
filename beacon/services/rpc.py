@@ -749,6 +749,19 @@ class RpcClient:
             return True, "OK"
         return False, "Lock failed"
 
+    def get_staking_status(self) -> bool | None:
+        """Query the daemon for current staking state.
+        
+        Returns:
+            True if staking is enabled, False if disabled, None on error.
+        """
+        result = self._safe_call("setstaking")
+        if isinstance(result, bool):
+            return result
+        if isinstance(result, str):
+            return result.strip().lower() == "true"
+        return None
+
     def set_staking(self, enabled: bool) -> Any:
         """Enable or disable staking. HTTP first, CLI fallback."""
         command = "true" if enabled else "false"
