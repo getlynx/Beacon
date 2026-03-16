@@ -1087,6 +1087,9 @@ class PeerListPanel(VerticalScroll):
         if not lines:
             self._content.update("... loading")
             return
+        # Remove mission-text class to clear center-middle alignment when showing peer list
+        if self._content.has_class("mission-text"):
+            self._content.remove_class("mission-text")
         normalized: list[tuple[str, int | None] | tuple[str, str, str, str, int | None]] = []
         for item in lines:
             if isinstance(item, tuple) and len(item) == 5:
