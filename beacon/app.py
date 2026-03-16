@@ -1362,17 +1362,17 @@ class AddressListPanel(VerticalScroll):
         self._render_addresses()
 
 
-# Network Activity column widths: height=7, hash=4, delta=7, tx=6, shards=6, diff=6
+# Network Activity column widths: height=7, hash=8, delta=9, tx=6, shards=7, diff=6
 _NETWORK_HEIGHT_W = 7
-_NETWORK_HASH_W = 4
-_NETWORK_DELTA_W = 7
+_NETWORK_HASH_W = 8
+_NETWORK_DELTA_W = 9
 _NETWORK_TX_W = 6
-_NETWORK_SHARDS_W = 6
+_NETWORK_SHARDS_W = 7
 _NETWORK_DIFF_W = 6
 _NETWORK_FIXED_TOTAL = (
     _NETWORK_HEIGHT_W + _NETWORK_HASH_W + _NETWORK_DELTA_W
     + _NETWORK_TX_W + _NETWORK_SHARDS_W + _NETWORK_DIFF_W + 12
-)  # +12 for 6 gaps of 2 spaces
+)  # +12 for 6 gaps of 2 spaces each
 
 
 class NetworkActivityPanel(VerticalScroll):
@@ -1390,6 +1390,8 @@ class NetworkActivityPanel(VerticalScroll):
         self._syncing = False
         self._logo_anim_frame: int = 0
         self._logo_anim_timer = None
+        self._time_since_latest: str | None = None
+        self._latest_year: int | None = None
 
     def compose(self) -> ComposeResult:
         yield self._content
@@ -1399,14 +1401,34 @@ class NetworkActivityPanel(VerticalScroll):
         self._logo_anim_timer = self.set_interval(0.1, self._logo_tick)
 
     def _logo_tick(self) -> None:
-        """Render one frame of the animated LYNX logo, centered."""
+        """Render one frame of the animated LYNX logo, centered both horizontally and vertically."""
         frame = self._logo_anim_frame
         texts = []
+        
+        # Calculate vertical centering
+        logo_height = len(_LYNX_LOGO_LINES)
+        try:
+            available_height = self.size.height - 2  # Account for borders
+        except Exception:
+            available_height = 20
+        
+        # Add empty lines before logo to center it vertically
+        padding_top = max(0, (available_height - logo_height) // 2)
+        for _ in range(padding_top):
+            texts.append(Text(""))
+        
+        # Add the logo lines
         for i, line in enumerate(_LYNX_LOGO_LINES):
             color_idx = _LOGO_RAINBOW[(frame + i) % len(_LOGO_RAINBOW)]
             # Center the line and apply color
             centered = Text(line, style=f"color({color_idx})", justify="center")
             texts.append(centered)
+        
+        # Add empty lines after logo to fill space
+        padding_bottom = max(0, available_height - logo_height - padding_top)
+        for _ in range(padding_bottom):
+            texts.append(Text(""))
+        
         self._content.update(Group(*texts))
         self._logo_anim_frame += 1
 
@@ -1422,7 +1444,7 @@ class NetworkActivityPanel(VerticalScroll):
             width = 60
         show_diff = not self._syncing
         fixed_total = _NETWORK_FIXED_TOTAL if show_diff else (_NETWORK_FIXED_TOTAL - _NETWORK_DIFF_W - 2)
-        time_width = max(8, width - fixed_total)
+        time_width = max(17, width - fixed_total)  # 17 chars for "03-15 07:56:00 PM"
         lines = []
         for i, (height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count) in enumerate(
             self._raw_entries
@@ -1439,7 +1461,7 @@ class NetworkActivityPanel(VerticalScroll):
                 f"{height:>{_NETWORK_HEIGHT_W}}  "
                 f"{hash_short:<{_NETWORK_HASH_W}}  "
                 f"{time_trunc:<{time_width}}  "
-                f"{delta_display:<{_NETWORK_DELTA_W}}  "
+                f"{delta_display:>{_NETWORK_DELTA_W}}  "
                 f"{tx_str:>{_NETWORK_TX_W}}  "
                 f"{shard_str:>{_NETWORK_SHARDS_W}}"
             )
@@ -1450,8 +1472,8 @@ class NetworkActivityPanel(VerticalScroll):
                     )
                 else:
                     diff_str = "-".rjust(_NETWORK_DIFF_W)
-                pad = max(0, width - len(left) - _NETWORK_DIFF_W)
-                line = left + " " * pad + diff_str
+                # Always use exactly 2 spaces before difficulty
+                line = left + "  " + diff_str
             else:
                 line = left
             lines.append(line)
@@ -1468,17 +1490,32 @@ class NetworkActivityPanel(VerticalScroll):
         time_since_latest: str | None = None,
         difficulties: list[float] | None = None,
         syncing: bool = False,
+        latest_year: int | None = None,
     ) -> None:
         self._heights = [e[0] for e in entries]
         self._raw_entries = entries
         self._difficulties = difficulties
         self._syncing = syncing
+        
+        # Update stored latest_year if provided, otherwise reuse existing
+        if latest_year is not None:
+            self._latest_year = latest_year
+        
         if count is not None:
-            self.border_title = f"{self.title} (latest {count} blocks)"
+            if self._latest_year:
+                self.border_title = f"{self.title} (latest {count} blocks in {self._latest_year})"
+            else:
+                self.border_title = f"{self.title} (latest {count} blocks)"
         else:
             self.border_title = self.title
-        if time_since_latest:
-            self.border_subtitle = f"Ordered by block height | {time_since_latest}"
+        
+        # Update stored time_since_latest if provided, otherwise reuse existing
+        if time_since_latest is not None:
+            self._time_since_latest = time_since_latest
+        
+        # Use stored value for subtitle
+        if self._time_since_latest:
+            self.border_subtitle = f"Ordered by block height | {self._time_since_latest}"
             self.border_subtitle_align = ("right", "bottom")
         else:
             self.border_subtitle = "Ordered by block height"
@@ -2752,7 +2789,7 @@ class Beacon(App):
     }
     #overview-network Static {
         width: 100%;
-        height: 100%;
+        height: auto;
         content-align: center middle;
     }
     """
@@ -2903,6 +2940,7 @@ class Beacon(App):
         self._wallet_balance: float = 0.0
         self._last_notified_block_height: int | None = None
         self._prev_peer_addresses: set[str] = set()
+        self._block_tx_shard_cache: dict[int, tuple[int, int]] = {}  # Cache: height -> (tx_count, shard_count)
         self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
         self._last_node_center_lon: float | None = None
         self._fullscreen_hidden_widgets = (
@@ -4707,6 +4745,95 @@ class Beacon(App):
         await self.refresh_data()
         self.header.reset_indicator()
 
+    async def _update_block_tx_counts_async(self, initial_entries: list[tuple[int, str, str, str, str, int, int]]) -> None:
+        """Progressively fetch and update tx/shard counts for blocks in the background.
+        
+        This runs after the initial display is shown with basic block info, updating
+        the display as transaction counts become available.
+        """
+        # Debug logging to file
+        try:
+            debug_log = open("/tmp/beacon-bg-task.log", "w")
+            debug_log.write(f"Background task started with {len(initial_entries)} entries\n")
+            debug_log.flush()
+        except:
+            debug_log = None
+        
+        if not initial_entries:
+            if debug_log:
+                debug_log.write("No entries to process\n")
+                debug_log.close()
+            return
+        
+        # Create a mutable list we can update
+        updated_entries = list(initial_entries)
+        
+        # Fetch tx/shard counts for each block, starting from newest
+        for i, entry in enumerate(initial_entries):
+            height, hash_short, time_display, delta_display, hash_full, _, _ = entry
+            
+            if not hash_full or len(hash_full) < 64:
+                continue
+            
+            try:
+                if debug_log:
+                    debug_log.write(f"Processing block {height} ({hash_short}): hash_full={hash_full[:16]}...\n")
+                    debug_log.flush()
+                
+                # Fetch counts for this block in a background executor
+                tx_count, shard_count = await asyncio.get_event_loop().run_in_executor(
+                    None, self.rpc.count_block_transactions_and_shards, hash_full
+                )
+                
+                if debug_log:
+                    debug_log.write(f"Block {height}: tx={tx_count}, shards={shard_count}\n")
+                    debug_log.flush()
+                
+                # Update the entry with the new counts and store in cache
+                updated_entries[i] = (height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count)
+                self._block_tx_shard_cache[height] = (tx_count, shard_count)
+                
+                # Update the display every block (or batch every N blocks if preferred)
+                if not self._showing_startup_splash:
+                    difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
+                    self.overview_network.update_entries(
+                        updated_entries,
+                        count=50,
+                        time_since_latest=None,  # Keep existing time display
+                        difficulties=difficulty_data if difficulty_data else None,
+                        syncing=not self._is_synced,
+                    )
+                    if debug_log:
+                        debug_log.write(f"Block {height}: Display updated\n")
+                        debug_log.flush()
+                
+                # Small delay to avoid overwhelming the RPC (process ~20 blocks/second)
+                await asyncio.sleep(0.05)
+                
+            except Exception as e:
+                # Log error but continue processing other blocks
+                if debug_log:
+                    debug_log.write(f"ERROR processing block {height}: {e}\n")
+                    debug_log.flush()
+                print(f"Error fetching tx/shard counts for block {height}: {e}", file=sys.stderr)
+                continue
+        
+        # Clean up old cache entries - keep only last 500 blocks to prevent memory bloat
+        if self._block_tx_shard_cache:
+            current_heights = [e[0] for e in updated_entries]
+            if current_heights:
+                max_height = max(current_heights)
+                min_keep_height = max_height - 500
+                old_heights = [h for h in self._block_tx_shard_cache.keys() if h < min_keep_height]
+                for h in old_heights:
+                    del self._block_tx_shard_cache[h]
+                if debug_log and old_heights:
+                    debug_log.write(f"Cleaned {len(old_heights)} old cache entries\n")
+        
+        if debug_log:
+            debug_log.write("Background task completed\n")
+            debug_log.close()
+
     async def refresh_node_status_bar(self) -> None:
         """Refresh the status bar node status every 30 seconds."""
         self.status_bar.node_status = "refreshing"
@@ -4831,29 +4958,48 @@ class Beacon(App):
         wallet_mine = balances.get("mine")
         wallet_mine = wallet_mine if isinstance(wallet_mine, dict) else {}
 
-        network_entries, latest_block_time, tz_name = self.logs.get_update_tip_entries(50)
-
-        # Fetch tx and shard counts for each block
-        def _fetch_tx_and_shard_counts() -> list[tuple[int, str, str, str, str, int, int]]:
-            enhanced_entries = []
-            for entry in network_entries:
-                if len(entry) >= 5:
-                    height, hash_short, hash_full, time_display, delta_display = entry
-                    if hash_full and hash_full != "-" and len(hash_full) > 8:
-                        try:
-                            tx_count, shard_count = self.rpc.count_block_transactions_and_shards(hash_full)
-                        except Exception as e:
-                            print(f"Error fetching counts for block {height}: {e}", file=sys.stderr)
-                            tx_count, shard_count = 0, 0
-                    else:
-                        tx_count, shard_count = 0, 0
-                    enhanced_entries.append((height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count))
-                else:
-                    # Fallback for malformed entries
-                    enhanced_entries.append((entry[0], entry[1], entry[2] if len(entry) > 2 else "-", entry[3] if len(entry) > 3 else "-", "-", 0, 0))
-            return enhanced_entries
+        # Get user's selected timezone
+        tz_name = "UTC"
+        try:
+            if hasattr(self, "system") and self.system:
+                tz_name = self.system.get_timezone() or "UTC"
+                if tz_name == "unknown":
+                    tz_name = "UTC"
+        except Exception:
+            pass
         
-        network_entries_with_counts = await asyncio.get_event_loop().run_in_executor(None, _fetch_tx_and_shard_counts)
+        # Get timezone abbreviation for display
+        tz_abbr = "UTC"
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+            # Get abbreviation for current time in the specified timezone
+            tz_abbr = datetime.now(tz).strftime("%Z")
+        except Exception:
+            tz_abbr = "UTC"
+        
+        # Get latest blocks quickly (without tx counts) for immediate display
+        def _fetch_blocks_basic() -> tuple[list[tuple[int, str, str, str, str, int, int]], int | None]:
+            return self.rpc.get_latest_blocks_from_chain(50, include_tx_counts=False, tz_name=tz_name)
+        
+        network_entries_with_counts, latest_block_time = await asyncio.get_event_loop().run_in_executor(None, _fetch_blocks_basic)
+        
+        # Apply cached tx/shard counts to the entries
+        network_entries_with_counts = [
+            (height, hash_short, time_display, delta_display, hash_full,
+             self._block_tx_shard_cache.get(height, (0, 0))[0],
+             self._block_tx_shard_cache.get(height, (0, 0))[1])
+            for height, hash_short, time_display, delta_display, hash_full, _, _ in network_entries_with_counts
+        ]
+        
+        # Spawn background task to fetch tx/shard counts and update display progressively
+        # Store task reference to prevent garbage collection
+        task = asyncio.create_task(self._update_block_tx_counts_async(network_entries_with_counts))
+        # Store in instance to keep reference
+        if not hasattr(self, '_bg_tasks'):
+            self._bg_tasks = set()
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
 
         peer_rows: list[tuple[int, str, str, str, str, dict]] = []
         for peer in peer_info:
@@ -5219,13 +5365,17 @@ class Beacon(App):
 
         # Time since latest block for Network Activity card
         time_since = "-"
+        latest_year = None
         if latest_block_time:
-            elapsed = datetime.now(timezone.utc).astimezone() - latest_block_time
+            # Convert Unix timestamp to datetime for comparison
+            block_dt = datetime.fromtimestamp(latest_block_time, tz=timezone.utc)
+            latest_year = block_dt.year
+            elapsed = datetime.now(timezone.utc) - block_dt
             total_secs = max(0, int(elapsed.total_seconds()))
             mins, secs = divmod(total_secs, 60)
             time_since = f"{mins}m {secs}s since latest block"
-        if tz_name:
-            time_since = f"{time_since} ({tz_name})"
+        if tz_abbr:
+            time_since = f"{time_since} ({tz_abbr})"
         difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
         is_syncing = bool(blockchain_info.get("initialblockdownload"))
         daemon_running = data.get("daemon_status") == "running"
@@ -5255,6 +5405,7 @@ class Beacon(App):
                     time_since_latest=time_since,
                     difficulties=difficulty_data if difficulty_data else None,
                     syncing=is_syncing,
+                    latest_year=latest_year,
                 )
         self._schedule_update(0.1, _update_network_card)
         def _update_peers_card() -> None:

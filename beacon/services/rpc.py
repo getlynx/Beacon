@@ -4,6 +4,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -364,6 +365,9 @@ class RpcClient:
     def count_block_transactions_and_shards(self, block_hash: str) -> tuple[int, int]:
         """Count regular transactions and shards (op_return outputs) in a block.
         
+        NOTE: This method is retained for compatibility but is no longer used by the UI.
+        The UI now uses get_latest_blocks_from_chain() which includes tx/shard counts.
+        
         In PoS blocks:
         - First tx (index 0) is generation/coinbase
         - Second tx (index 1) is coinstake  
@@ -373,37 +377,66 @@ class RpcClient:
         - tx_count: number of data transactions (index 2+) that have non-op_return outputs
         - shard_count: total number of op_return vouts across all data transactions
         """
+        debug_log = None
         try:
-            # Get block with verbosity 2 to include full transaction details
-            block = self.getblock(block_hash, 2)
+            debug_log = open("/tmp/beacon-count-debug.log", "a")
+            debug_log.write(f"\n=== Processing block {block_hash[:8]} ===\n")
+            
+            # Get block with verbosity 1 (tx IDs only) - verbosity 2 has a daemon bug
+            block = self.getblock(block_hash, 1)
+            debug_log.write(f"getblock(1) returned: {type(block)}, is_dict: {isinstance(block, dict)}\n")
+            
             if not block or not isinstance(block, dict):
+                debug_log.write("Block is None or not dict, returning (0, 0)\n")
+                debug_log.close()
                 return (0, 0)
             
             tx_list = block.get("tx")
+            debug_log.write(f"tx_list type: {type(tx_list)}, is_list: {isinstance(tx_list, list)}\n")
+            
             if not isinstance(tx_list, list):
+                debug_log.write("tx_list is not a list, returning (0, 0)\n")
+                debug_log.close()
                 return (0, 0)
+            
+            debug_log.write(f"Block has {len(tx_list)} transaction IDs\n")
             
             # Blocks with only generation + coinstake (no data txs) should return (0, 0)
             if len(tx_list) < 3:
+                debug_log.write("Less than 3 transactions, returning (0, 0)\n")
+                debug_log.close()
                 return (0, 0)
             
             tx_count = 0
             shard_count = 0
             
             # Process transactions from index 2 onwards (data transactions)
-            for tx in tx_list[2:]:
-                if not isinstance(tx, dict):
+            # We need to fetch each transaction individually since verbosity 2 is broken
+            for idx, txid in enumerate(tx_list[2:], start=2):
+                if not isinstance(txid, str):
+                    debug_log.write(f"  tx[{idx}] is not string: {type(txid)}\n")
+                    continue
+                
+                debug_log.write(f"  Fetching tx[{idx}]: {txid[:16]}...\n")
+                
+                # Get transaction details
+                tx = self._safe_call("getrawtransaction", [txid, True])
+                if not tx or not isinstance(tx, dict):
+                    debug_log.write(f"  tx[{idx}] getrawtransaction failed\n")
                     continue
                 
                 vout = tx.get("vout", [])
                 if not isinstance(vout, list):
+                    debug_log.write(f"  tx[{idx}] vout is not list: {type(vout)}\n")
                     continue
+                
+                debug_log.write(f"  tx[{idx}] has {len(vout)} outputs\n")
                 
                 has_regular_output = False
                 tx_op_return_count = 0
                 
                 # Analyze all outputs in this transaction
-                for output in vout:
+                for out_idx, output in enumerate(vout):
                     if not isinstance(output, dict):
                         continue
                     script_pubkey = output.get("scriptPubKey")
@@ -411,8 +444,10 @@ class RpcClient:
                         continue
                     
                     script_type = script_pubkey.get("type")
+                    
                     if script_type == "nulldata":  # op_return is type "nulldata"
                         tx_op_return_count += 1
+                        debug_log.write(f"    tx[{idx}] vout[{out_idx}] is nulldata (shard)\n")
                     else:
                         has_regular_output = True
                 
@@ -422,14 +457,151 @@ class RpcClient:
                 
                 # Add all op_return outputs from this tx to total shard count
                 shard_count += tx_op_return_count
+                
+                debug_log.write(f"  tx[{idx}] result: has_regular={has_regular_output}, op_returns={tx_op_return_count}\n")
             
+            debug_log.write(f"Final result: tx_count={tx_count}, shard_count={shard_count}\n")
+            debug_log.close()
             return (tx_count, shard_count)
             
         except Exception as e:
-            # Log the exception for debugging but don't crash
-            import sys
-            print(f"Error counting tx/shards for block {block_hash[:8]}: {e}", file=sys.stderr)
+            if debug_log:
+                debug_log.write(f"EXCEPTION: {e}\n")
+                import traceback
+                debug_log.write(traceback.format_exc())
+                debug_log.close()
             return (0, 0)
+
+    def get_latest_blocks_from_chain(self, count: int = 50, include_tx_counts: bool = False, tz_name: str = "UTC") -> tuple[list[tuple[int, str, str, str, str, int, int]], int | None]:
+        """Get the latest N blocks directly from the blockchain via RPC.
+        
+        Args:
+            count: Number of recent blocks to fetch
+            include_tx_counts: If True, fetch full tx details (slow). If False, only basic block info (fast).
+            tz_name: Timezone name for timestamp formatting (e.g., "America/New_York", "UTC")
+        
+        Returns:
+            tuple of (blocks_list, latest_block_time) where:
+            - blocks_list: List of tuples (height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count)
+            - latest_block_time: Unix timestamp of most recent block, or None
+        """
+        try:
+            # Get current blockchain height
+            blockchain_info = self._safe_call("getblockchaininfo")
+            if not blockchain_info or not isinstance(blockchain_info, dict):
+                return ([], None)
+            
+            current_height = blockchain_info.get("blocks")
+            if not isinstance(current_height, int) or current_height < 0:
+                return ([], None)
+            
+            # Calculate the range of blocks to fetch
+            start_height = max(0, current_height - count + 1)
+            blocks_with_times = []  # Will store (height, hash_short, hash_full, timestamp_str, block_time, tx_count, shard_count)
+            latest_time = None
+            
+            # Choose verbosity: 1 for fast (no tx details), 2 for full tx data
+            verbosity = 2 if include_tx_counts else 1
+            
+            for height in range(current_height, start_height - 1, -1):  # Descending order (newest first)
+                # Get block hash
+                block_hash = self.getblockhash(height)
+                if not block_hash or not isinstance(block_hash, str):
+                    continue
+                
+                # Get block details
+                block_data = self.getblock(block_hash, verbosity)
+                if not block_data or not isinstance(block_data, dict):
+                    continue
+                
+                # Extract timestamp
+                block_time = block_data.get("time")
+                if not isinstance(block_time, int):
+                    continue
+                
+                # Store the most recent block time
+                if latest_time is None:
+                    latest_time = block_time
+                
+                # Format timestamp with 12-hour format and AM/PM in the specified timezone
+                try:
+                    # Convert UTC timestamp to local timezone
+                    dt_utc = datetime.fromtimestamp(block_time, tz=timezone.utc)
+                    dt_local = dt_utc.astimezone(ZoneInfo(tz_name))
+                    timestamp_str = dt_local.strftime("%m-%d %I:%M:%S %p")
+                except Exception:
+                    # Fallback to UTC if timezone conversion fails
+                    dt = datetime.fromtimestamp(block_time, tz=timezone.utc)
+                    timestamp_str = dt.strftime("%m-%d %I:%M:%S %p")
+                
+                # Count transactions and shards (only if include_tx_counts=True)
+                tx_count = 0
+                shard_count = 0
+                
+                if include_tx_counts:
+                    tx_list = block_data.get("tx", [])
+                    
+                    if isinstance(tx_list, list):
+                        # Count regular transactions (excluding generation and coinstake)
+                        tx_count = max(0, len(tx_list) - 2)
+                        
+                        # Count shards (op_return outputs) across all transactions
+                        for tx in tx_list:
+                            if isinstance(tx, dict):
+                                vout = tx.get("vout", [])
+                                if isinstance(vout, list):
+                                    for output in vout:
+                                        if isinstance(output, dict):
+                                            script_pub_key = output.get("scriptPubKey", {})
+                                            if isinstance(script_pub_key, dict):
+                                                script_type = script_pub_key.get("type")
+                                                if script_type == "nulldata":
+                                                    shard_count += 1
+                
+                # Create short hash (first 8 characters)
+                hash_short = block_hash[:8] if len(block_hash) >= 8 else block_hash
+                
+                blocks_with_times.append((height, hash_short, block_hash, timestamp_str, block_time, tx_count, shard_count))
+            
+            # Now compute delta times between consecutive blocks
+            blocks = []
+            for i, (height, hash_short, hash_full, timestamp_str, block_time, tx_count, shard_count) in enumerate(blocks_with_times):
+                if i + 1 < len(blocks_with_times):
+                    # Calculate delta from this block to the previous block (next in list since descending order)
+                    prev_time = blocks_with_times[i + 1][4]  # block_time of previous block
+                    delta_seconds = block_time - prev_time
+                    
+                    # Format delta as "Xm Ys" or "Xs" (or "-Xm Ys" for negative)
+                    if delta_seconds >= 0:
+                        sign = ""
+                    else:
+                        sign = "-"
+                        delta_seconds = abs(delta_seconds)
+                    
+                    if delta_seconds >= 60:
+                        mins = delta_seconds // 60
+                        secs = delta_seconds % 60
+                        delta_display = f"{sign}{mins}m {secs}s"
+                    else:
+                        delta_display = f"{sign}{delta_seconds}s"
+                else:
+                    # No previous block to compare to
+                    delta_display = "-"
+                
+                blocks.append((height, hash_short, timestamp_str, delta_display, hash_full, tx_count, shard_count))
+            
+            return (blocks, latest_time)
+            
+        except Exception as e:
+            # Log error but return empty list rather than crashing
+            try:
+                with open("/tmp/beacon-rpc-debug.log", "a") as f:
+                    f.write(f"ERROR in get_latest_blocks_from_chain: {e}\n")
+                    import traceback
+                    f.write(traceback.format_exc())
+            except:
+                pass
+            return ([], None)
 
     def get_backup_dir(self) -> str:
         """Return the backup directory: /var/lib/{chain-name}-backup/."""
