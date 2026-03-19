@@ -355,6 +355,56 @@ EOF
   systemctl start lynx-sync-monitor.timer
 }
 
+install_log_monitor() {
+  mkdir -p "${INSTALL_ROOT}"
+  cat <<'EOF' > "${INSTALL_ROOT}/lynx-log-monitor.sh"
+#!/bin/bash
+
+set -euo pipefail
+
+WORKING_DIR="${LYNX_WORKING_DIR:-/var/lib/lynx}"
+LOG_FILE="${WORKING_DIR}/debug.log"
+MAX_SIZE=5368709120  # 5GB in bytes
+
+if [ ! -f "$LOG_FILE" ]; then
+  exit 0
+fi
+
+FILE_SIZE=$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)
+if [ "$FILE_SIZE" -gt "$MAX_SIZE" ]; then
+  systemctl restart lynx.service >/dev/null 2>&1 || true
+fi
+EOF
+  chmod +x "${INSTALL_ROOT}/lynx-log-monitor.sh"
+
+  cat <<'EOF' > /etc/systemd/system/lynx-log-monitor.service
+[Unit]
+Description=Restart Lynx if debug.log exceeds 5GB
+After=network.target lynx.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/beacon/lynx-log-monitor.sh
+EOF
+
+  cat <<'EOF' > /etc/systemd/system/lynx-log-monitor.timer
+[Unit]
+Description=Check Lynx debug.log size every 12 hours
+
+[Timer]
+OnBootSec=30min
+OnUnitActiveSec=12h
+Unit=lynx-log-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable lynx-log-monitor.timer
+  systemctl start lynx-log-monitor.timer
+}
+
 install_backup() {
   mkdir -p "${INSTALL_ROOT}"
   cat <<'BACKUP_EOF' > "${INSTALL_ROOT}/lynx-wallet-backup.sh"
@@ -443,6 +493,7 @@ EOF
   install_lynx_binary
   install_lynx_service
   install_sync_monitor
+  install_log_monitor
   install_backup
    fetch_app
    install_app

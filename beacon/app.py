@@ -3214,6 +3214,8 @@ class Beacon(App):
         self.set_timer(3.0, self._init_backup_card)
         self.set_timer(30.0, lambda: self.set_interval(30, self._monitor_ssh_port))
         self.set_timer(60.0, lambda: self.set_interval(300, self._check_backup_timer))
+        self.set_timer(15.0, self._check_debug_log_size)
+        self.set_timer(15.0, lambda: self.set_interval(43200, self._check_debug_log_size))
         # Keep 'z' binding active but hidden from footer (shown in header instead)
         self.bind("z", "toggle_timezone_card", description="Change Timezone", show=False)
         self._sync_map_offset_binding()
@@ -5718,6 +5720,35 @@ class Beacon(App):
         if disk_lines:
             storage_lines = disk_lines + storage_lines
         self.overview_storage.update_lines(storage_lines)
+
+    # --- Debug log size monitor ---
+
+    _DEBUG_LOG_MAX_BYTES = 5 * 1024 * 1024 * 1024  # 5GB
+
+    async def _check_debug_log_size(self) -> None:
+        """Check debug.log size and notify the user."""
+        log_path = os.path.join(LYNX_WORKING_DIR, "debug.log")
+        try:
+            size = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: os.path.getsize(log_path) if os.path.isfile(log_path) else 0
+            )
+        except OSError:
+            return
+        if size > self._DEBUG_LOG_MAX_BYTES:
+            self.notify(
+                "Debug log exceeds 5 GB — the daemon will be restarted so the log can be truncated.",
+                title="Debug Log",
+                severity="warning",
+                timeout=10,
+            )
+        else:
+            size_mb = size / (1024 * 1024)
+            self.notify(
+                f"Debug log is {size_mb:.0f} MB — no automated truncation needed.",
+                title="Debug Log",
+                severity="information",
+                timeout=5,
+            )
 
     # --- Network node count (CryptoID) ---
 
