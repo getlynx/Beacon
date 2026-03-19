@@ -285,7 +285,7 @@ Wants=network-online.target
 Type=forking
 ExecStartPre=/bin/mkdir -p ${WORKING_DIR}
 ExecStartPre=/bin/chown root:root ${WORKING_DIR}
-ExecStart=/usr/local/bin/lynxd -datadir=${WORKING_DIR} -dbcache=2048
+ExecStart=/usr/local/bin/lynxd -datadir=${WORKING_DIR} -dbcache=2048 -shrinkdebugfile
 ExecStop=/usr/local/bin/lynx-cli -datadir=${WORKING_DIR} stop
 Restart=on-failure
 RestartSec=30
