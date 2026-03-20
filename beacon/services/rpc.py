@@ -886,10 +886,13 @@ class RpcClient:
         all_addresses = self._safe_call("listreceivedbyaddress", [0, True]) or []
 
         immature_utxos = 0
+        mature_utxos = 0
         for utxo in listunspent:
             confirmations = utxo.get("confirmations", 0)
             if 0 < confirmations < 31:
                 immature_utxos += 1
+            elif confirmations > 30:
+                mature_utxos += 1
 
         stakes_24h = self._count_stakes(1)
         stakes_7d = self._count_stakes(7)
@@ -929,6 +932,7 @@ class RpcClient:
             "unconfirmed_balance": unconfirmed_balance,
             "wallet_balance": balance,
             "immature_utxos": immature_utxos,
+            "mature_utxos": mature_utxos,
             "stakes_24h": stakes_24h,
             "stakes_7d": stakes_7d,
             "yield_24h": yield_24h,

@@ -5501,8 +5501,17 @@ class Beacon(App):
             else "unknown"
         )
 
+        mature_utxos = data.get("mature_utxos") or 0
+        if mature_utxos == 0:
+            staking_title = f"{E('🏆', '>')} Staking"
+        elif mature_utxos == 1:
+            staking_title = f"{E('🏆', '>')} Staking (1 mature UTXO)"
+        else:
+            staking_title = f"{E('🏆', '>')} Staking ({mature_utxos} mature UTXOs)"
+
         def _update_staking_card() -> None:
             if not self._showing_startup_splash:
+                self.node_status_card.border_title = staking_title
                 if not staking_available:
                     # Keep the card visible but hide the subtitle value
                     self.node_status_card._stop_animation()
