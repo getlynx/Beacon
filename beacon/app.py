@@ -3015,6 +3015,7 @@ class Beacon(App):
         from beacon.services.block_cache import BlockCache
         self._block_cache = BlockCache()
         self._block_tx_shard_cache: dict[int, tuple[int, int]] = {}  # In-memory working cache
+        self._last_bg_task_result: tuple[int, int] | None = None  # (fetched, cached) for log dedup
         self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
         self._last_node_center_lon: float | None = None
         self._fullscreen_hidden_widgets = (
@@ -4866,10 +4867,7 @@ class Beacon(App):
         """
         from beacon.journal import debug as _jlog, error as _jerr
 
-        _jlog(f"bg-task: started with {len(initial_entries)} entries")
-
         if not initial_entries:
-            _jlog("bg-task: no entries to process")
             return
 
         # Create a mutable list we can update
@@ -4926,7 +4924,10 @@ class Beacon(App):
         # Flush new entries to disk
         self._block_cache.flush()
 
-        _jlog(f"bg-task: completed — fetched={fetched}, cached={skipped}")
+        result = (fetched, skipped)
+        if result != self._last_bg_task_result:
+            _jlog(f"bg-task: completed — fetched={fetched}, cached={skipped}")
+            self._last_bg_task_result = result
 
     async def refresh_node_status_bar(self) -> None:
         """Refresh the status bar node status every 30 seconds."""
