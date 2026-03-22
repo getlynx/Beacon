@@ -567,7 +567,7 @@ class StorageCapabilityPanel(VerticalScroll):
 
 
 class DebugLogCard(VerticalScroll):
-    """Card showing last 50 lines of daemon debug.log; streams when visible."""
+    """Card showing last 50 lines of daemon debug.log or beacon journal; streams when visible."""
 
     DEBUG_LOG_LINES = 50
     DEBUG_LOG_HIDE_SUBSTRINGS = (
@@ -576,8 +576,13 @@ class DebugLogCard(VerticalScroll):
     )
     _ISO_UTC_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
 
+    # Log source modes
+    MODE_LYNX = "lynx"
+    MODE_BEACON = "beacon"
+
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
+        self._mode = self.MODE_LYNX
         self.border_title = f"{E('📜', '>')} Debug Log"
         self.border_title_align = ("left", "top")
         self.border_subtitle = ""
@@ -587,6 +592,20 @@ class DebugLogCard(VerticalScroll):
         self._content = Static("... loading", classes="network-row-text")
         self._refresh_timer: object = None
         self._scroll_to_bottom_on_next_refresh = False
+
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    def set_mode(self, mode: str) -> None:
+        """Switch between MODE_LYNX and MODE_BEACON log sources."""
+        self._mode = mode
+        if mode == self.MODE_BEACON:
+            self.border_title = f"{E('📜', '>')} Beacon Journal"
+        else:
+            self.border_title = f"{E('📜', '>')} Debug Log"
+        self._scroll_to_bottom_on_next_refresh = True
+        self._refresh_lines()
 
     def compose(self) -> ComposeResult:
         yield self._content
@@ -618,33 +637,52 @@ class DebugLogCard(VerticalScroll):
                 return m.group(0)
         return self._ISO_UTC_PATTERN.sub(repl, line)
 
+    def _read_beacon_journal_lines(self) -> list[str]:
+        """Read recent beacon journal entries via journalctl."""
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["journalctl", "-t", "beacon", "-n", str(self.DEBUG_LOG_LINES), "--no-pager", "-o", "short-precise"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip().splitlines()
+            return ["(no beacon journal entries)"]
+        except Exception as exc:
+            return [f"journalctl error: {exc!s}"[:200]]
+
     def _refresh_lines(self) -> None:
         if not self.display:
             return
         # Only auto-scroll to bottom if user hasn't scrolled up (so they can read history)
         at_bottom = self.is_vertical_scroll_end
-        try:
-            tz_name = getattr(self.app, "system", None)
-            tz_name = (tz_name.get_timezone() if tz_name and hasattr(tz_name, "get_timezone") else None) or "UTC"
-            if tz_name == "unknown":
-                tz_name = "UTC"
+
+        if self._mode == self.MODE_BEACON:
+            lines = self._read_beacon_journal_lines()
+        else:
             try:
-                tz = ZoneInfo(tz_name)
+                tz_name = getattr(self.app, "system", None)
+                tz_name = (tz_name.get_timezone() if tz_name and hasattr(tz_name, "get_timezone") else None) or "UTC"
+                if tz_name == "unknown":
+                    tz_name = "UTC"
+                try:
+                    tz = ZoneInfo(tz_name)
+                except Exception:
+                    tz = ZoneInfo("UTC")
             except Exception:
                 tz = ZoneInfo("UTC")
-        except Exception:
-            tz = ZoneInfo("UTC")
-        try:
-            tailer = self.app.logs
-            lines = tailer.tail_lines()
-            lines = [
-                ln for ln in lines
-                if not any(h in ln for h in self.DEBUG_LOG_HIDE_SUBSTRINGS)
-            ]
-            lines = lines[-self.DEBUG_LOG_LINES:] if len(lines) > self.DEBUG_LOG_LINES else lines
-            lines = [self._convert_utc_timestamps_in_line(ln, tz) for ln in lines]
-        except Exception:
-            lines = ["Unable to read debug.log"]
+            try:
+                tailer = self.app.logs
+                lines = tailer.tail_lines()
+                lines = [
+                    ln for ln in lines
+                    if not any(h in ln for h in self.DEBUG_LOG_HIDE_SUBSTRINGS)
+                ]
+                lines = lines[-self.DEBUG_LOG_LINES:] if len(lines) > self.DEBUG_LOG_LINES else lines
+                lines = [self._convert_utc_timestamps_in_line(ln, tz) for ln in lines]
+            except Exception:
+                lines = ["Unable to read debug.log"]
+
         if not lines:
             self._content.update("(no log lines)")
             return
@@ -2278,6 +2316,7 @@ class Beacon(App):
         Binding("w", "toggle_sweep_card", "Create Sweep transaction", show=False),
         ("m", "toggle_fullscreen_map", "Full Screen Map"),
         Binding("l", "toggle_debug_log_card", "View live daemon debug log", show=False),
+        Binding("b", "toggle_beacon_journal", "View Beacon journal log", show=False),
         Binding("y", "toggle_peer_location", "Toggle Peers view by IP or Location", show=False),
         ("e", "toggle_wallet_lock", "Encrypt Wallet"),
     ]
@@ -2973,7 +3012,9 @@ class Beacon(App):
         self._wallet_balance: float = 0.0
         self._last_notified_block_height: int | None = None
         self._prev_peer_addresses: set[str] = set()
-        self._block_tx_shard_cache: dict[int, tuple[int, int]] = {}  # Cache: height -> (tx_count, shard_count)
+        from beacon.services.block_cache import BlockCache
+        self._block_cache = BlockCache()
+        self._block_tx_shard_cache: dict[int, tuple[int, int]] = {}  # In-memory working cache
         self._map_center_on_node = False  # False = default view (Americas west), True = centered on node
         self._last_node_center_lon: float | None = None
         self._fullscreen_hidden_widgets = (
@@ -3530,6 +3571,7 @@ class Beacon(App):
         self._debug_log_revert_at = None
         if not self._show_debug_log_card:
             return
+        self.debug_log_card.set_mode(DebugLogCard.MODE_LYNX)
         self._set_debug_log_card_visible(False)
         if self._map_fullscreen_active:
             self._set_fullscreen_map_active(False)
@@ -3592,7 +3634,8 @@ class Beacon(App):
             )
 
     def action_toggle_debug_log_card(self) -> None:
-        """Toggle between Peer Map and Debug Log card (bound to l key). Works in fullscreen too."""
+        """Toggle between Peer Map and Lynx Debug Log card (bound to l key). Works in fullscreen too."""
+        self.debug_log_card.set_mode(DebugLogCard.MODE_LYNX)
         if self._map_fullscreen_active:
             if self._show_debug_log_card:
                 # Fullscreen Debug Log → switch back to fullscreen Peer Map (60s timer)
@@ -3623,6 +3666,35 @@ class Beacon(App):
                 )
             return
         self._set_debug_log_card_visible(not self._show_debug_log_card)
+
+    def _toggle_debug_log_with_mode(self, mode: str) -> None:
+        """Toggle the debug log card for a specific source mode.
+
+        If already showing this mode, close the card and return to map.
+        If closed or showing the other mode, open with the requested mode.
+        """
+        if self._show_debug_log_card and self.debug_log_card.mode == mode:
+            self.debug_log_card.set_mode(DebugLogCard.MODE_LYNX)
+            self._set_debug_log_card_visible(False)
+        else:
+            self.debug_log_card.set_mode(mode)
+            if not self._show_debug_log_card:
+                self._set_debug_log_card_visible(True)
+            else:
+                self.debug_log_card._scroll_to_bottom_on_next_refresh = True
+                self.debug_log_card._refresh_lines()
+
+    def action_show_lynx_debug_log(self) -> None:
+        """Toggle Lynx daemon debug.log in the Debug Log card."""
+        self._toggle_debug_log_with_mode(DebugLogCard.MODE_LYNX)
+
+    def action_show_beacon_journal(self) -> None:
+        """Toggle Beacon journal entries in the Debug Log card."""
+        self._toggle_debug_log_with_mode(DebugLogCard.MODE_BEACON)
+
+    def action_toggle_beacon_journal(self) -> None:
+        """Toggle Beacon journal view in the Debug Log card (bound to b key)."""
+        self._toggle_debug_log_with_mode(DebugLogCard.MODE_BEACON)
 
     def action_toggle_electrumx_log_card(self) -> None:
         """Toggle between Peer Map and ElectrumX log in map_log_slot (bound to j, only when ElectrumX installed)."""
@@ -4799,32 +4871,40 @@ class Beacon(App):
         if not initial_entries:
             _jlog("bg-task: no entries to process")
             return
-        
+
         # Create a mutable list we can update
         updated_entries = list(initial_entries)
-        
+        fetched = 0
+        skipped = 0
+
         # Fetch tx/shard counts for each block, starting from newest
         for i, entry in enumerate(initial_entries):
             height, hash_short, time_display, delta_display, hash_full, _, _ = entry
-            
+
             if not hash_full or len(hash_full) < 64:
                 continue
-            
-            try:
-                _jlog(f"bg-task: processing block {height} ({hash_short}): hash_full={hash_full[:16]}...")
 
+            # Skip blocks already in persistent cache
+            cached = self._block_cache.get(height)
+            if cached is not None:
+                updated_entries[i] = (height, hash_short, time_display, delta_display, hash_full, cached[0], cached[1])
+                self._block_tx_shard_cache[height] = cached
+                skipped += 1
+                continue
+
+            try:
                 # Fetch counts for this block in a background executor
                 tx_count, shard_count = await asyncio.get_event_loop().run_in_executor(
                     None, self.rpc.count_block_transactions_and_shards, hash_full
                 )
 
-                _jlog(f"bg-task: block {height}: tx={tx_count}, shards={shard_count}")
-
-                # Update the entry with the new counts and store in cache
+                # Update the entry and store in both caches
                 updated_entries[i] = (height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count)
                 self._block_tx_shard_cache[height] = (tx_count, shard_count)
+                self._block_cache.put(height, tx_count, shard_count)
+                fetched += 1
 
-                # Update the display every block (or batch every N blocks if preferred)
+                # Update the display every block
                 if not self._showing_startup_splash:
                     difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
                     self.overview_network.update_entries(
@@ -4834,7 +4914,6 @@ class Beacon(App):
                         difficulties=difficulty_data if difficulty_data else None,
                         syncing=not self._is_synced,
                     )
-                    _jlog(f"bg-task: block {height}: display updated")
 
                 # Small delay to avoid overwhelming the RPC (process ~20 blocks/second)
                 await asyncio.sleep(0.05)
@@ -4844,19 +4923,10 @@ class Beacon(App):
                 _jerr(f"bg-task: error processing block {height}: {e}")
                 continue
 
-        # Clean up old cache entries - keep only last 500 blocks to prevent memory bloat
-        if self._block_tx_shard_cache:
-            current_heights = [e[0] for e in updated_entries]
-            if current_heights:
-                max_height = max(current_heights)
-                min_keep_height = max_height - 500
-                old_heights = [h for h in self._block_tx_shard_cache.keys() if h < min_keep_height]
-                for h in old_heights:
-                    del self._block_tx_shard_cache[h]
-                if old_heights:
-                    _jlog(f"bg-task: cleaned {len(old_heights)} old cache entries")
+        # Flush new entries to disk
+        self._block_cache.flush()
 
-        _jlog("bg-task: completed")
+        _jlog(f"bg-task: completed — fetched={fetched}, cached={skipped}")
 
     async def refresh_node_status_bar(self) -> None:
         """Refresh the status bar node status every 30 seconds."""
@@ -5008,11 +5078,20 @@ class Beacon(App):
         
         network_entries_with_counts, latest_block_time = await asyncio.get_event_loop().run_in_executor(None, _fetch_blocks_basic)
         
-        # Apply cached tx/shard counts to the entries
+        # Apply cached tx/shard counts to the entries (check disk cache then memory cache)
+        def _cached_counts(height: int) -> tuple[int, int]:
+            mem = self._block_tx_shard_cache.get(height)
+            if mem is not None:
+                return mem
+            disk = self._block_cache.get(height)
+            if disk is not None:
+                self._block_tx_shard_cache[height] = disk
+                return disk
+            return (0, 0)
+
         network_entries_with_counts = [
             (height, hash_short, time_display, delta_display, hash_full,
-             self._block_tx_shard_cache.get(height, (0, 0))[0],
-             self._block_tx_shard_cache.get(height, (0, 0))[1])
+             _cached_counts(height)[0], _cached_counts(height)[1])
             for height, hash_short, time_display, delta_display, hash_full, _, _ in network_entries_with_counts
         ]
         
@@ -5555,8 +5634,8 @@ class Beacon(App):
 
         daemon_status_lines = [
             f"{daemon_label + ' Uptime':<{col}} {uptime_display}",
-            f"{daemon_label + ' Version':<{col}} {daemon_version}",
-            f"{'Beacon Version':<{col}} [@click='app.toggle_debug_log_card']{beacon_ver_display}[/]",
+            f"{daemon_label + ' Version':<{col}} [@click='app.show_lynx_debug_log']{daemon_version}[/]",
+            f"{'Beacon Version':<{col}} [@click='app.show_beacon_journal']{beacon_ver_display}[/]",
             f"{'Initial Blocks':<{col}} {ibd_status}",
             f"{'Tenant Status':<{col}} unregistered",
             f"{'Operating System':<{col}} {self._os_name}",
@@ -6080,12 +6159,13 @@ class Beacon(App):
             "x": ("toggle_send_card", "Create Send transaction"),
             "w": ("toggle_sweep_card", "Create Sweep transaction"),
             "l": ("toggle_debug_log_card", "View live daemon debug log"),
+            "b": ("toggle_beacon_journal", "View Beacon journal log"),
             "e": ("toggle_wallet_lock", self._wallet_binding_label()),
         }
         for key, (action, description) in desired.items():
             if key not in self._bindings.key_to_bindings:
-                # Hide the 's', 't', 'x', and 'w' keys from footer but keep them functional
-                if key in ("s", "t", "x", "w"):
+                # Hide the 's', 't', 'x', 'w', and 'b' keys from footer but keep them functional
+                if key in ("s", "t", "x", "w", "b"):
                     self.bind(key, action, description=description, show=False)
                 else:
                     self.bind(key, action, description=description)
