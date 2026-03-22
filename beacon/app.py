@@ -4792,18 +4792,12 @@ class Beacon(App):
         This runs after the initial display is shown with basic block info, updating
         the display as transaction counts become available.
         """
-        # Debug logging to file
-        try:
-            debug_log = open("/tmp/beacon-bg-task.log", "w")
-            debug_log.write(f"Background task started with {len(initial_entries)} entries\n")
-            debug_log.flush()
-        except:
-            debug_log = None
-        
+        from beacon.journal import debug as _jlog, error as _jerr
+
+        _jlog(f"bg-task: started with {len(initial_entries)} entries")
+
         if not initial_entries:
-            if debug_log:
-                debug_log.write("No entries to process\n")
-                debug_log.close()
+            _jlog("bg-task: no entries to process")
             return
         
         # Create a mutable list we can update
@@ -4817,23 +4811,19 @@ class Beacon(App):
                 continue
             
             try:
-                if debug_log:
-                    debug_log.write(f"Processing block {height} ({hash_short}): hash_full={hash_full[:16]}...\n")
-                    debug_log.flush()
-                
+                _jlog(f"bg-task: processing block {height} ({hash_short}): hash_full={hash_full[:16]}...")
+
                 # Fetch counts for this block in a background executor
                 tx_count, shard_count = await asyncio.get_event_loop().run_in_executor(
                     None, self.rpc.count_block_transactions_and_shards, hash_full
                 )
-                
-                if debug_log:
-                    debug_log.write(f"Block {height}: tx={tx_count}, shards={shard_count}\n")
-                    debug_log.flush()
-                
+
+                _jlog(f"bg-task: block {height}: tx={tx_count}, shards={shard_count}")
+
                 # Update the entry with the new counts and store in cache
                 updated_entries[i] = (height, hash_short, time_display, delta_display, hash_full, tx_count, shard_count)
                 self._block_tx_shard_cache[height] = (tx_count, shard_count)
-                
+
                 # Update the display every block (or batch every N blocks if preferred)
                 if not self._showing_startup_splash:
                     difficulty_data = getattr(self.difficulty_chart, "_difficulty_data", None) or []
@@ -4844,21 +4834,16 @@ class Beacon(App):
                         difficulties=difficulty_data if difficulty_data else None,
                         syncing=not self._is_synced,
                     )
-                    if debug_log:
-                        debug_log.write(f"Block {height}: Display updated\n")
-                        debug_log.flush()
-                
+                    _jlog(f"bg-task: block {height}: display updated")
+
                 # Small delay to avoid overwhelming the RPC (process ~20 blocks/second)
                 await asyncio.sleep(0.05)
-                
+
             except Exception as e:
                 # Log error but continue processing other blocks
-                if debug_log:
-                    debug_log.write(f"ERROR processing block {height}: {e}\n")
-                    debug_log.flush()
-                print(f"Error fetching tx/shard counts for block {height}: {e}", file=sys.stderr)
+                _jerr(f"bg-task: error processing block {height}: {e}")
                 continue
-        
+
         # Clean up old cache entries - keep only last 500 blocks to prevent memory bloat
         if self._block_tx_shard_cache:
             current_heights = [e[0] for e in updated_entries]
@@ -4868,12 +4853,10 @@ class Beacon(App):
                 old_heights = [h for h in self._block_tx_shard_cache.keys() if h < min_keep_height]
                 for h in old_heights:
                     del self._block_tx_shard_cache[h]
-                if debug_log and old_heights:
-                    debug_log.write(f"Cleaned {len(old_heights)} old cache entries\n")
-        
-        if debug_log:
-            debug_log.write("Background task completed\n")
-            debug_log.close()
+                if old_heights:
+                    _jlog(f"bg-task: cleaned {len(old_heights)} old cache entries")
+
+        _jlog("bg-task: completed")
 
     async def refresh_node_status_bar(self) -> None:
         """Refresh the status bar node status every 30 seconds."""

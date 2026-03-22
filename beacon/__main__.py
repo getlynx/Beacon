@@ -5,27 +5,26 @@ import contextlib
 
 
 class _TraceStream:
-    """Proxy stream that mirrors writes and logs call-site context."""
+    """Proxy stream that mirrors writes and logs call-site context to the journal."""
 
-    def __init__(self, name: str, wrapped, log_file, self_file: str, extract_stack) -> None:
+    def __init__(self, name: str, wrapped, self_file: str, extract_stack) -> None:
         self._name = name
         self._wrapped = wrapped
-        self._log = log_file
         self._self_file = self_file
         self._extract_stack = extract_stack
 
     def write(self, data) -> int:
         text = data if isinstance(data, str) else str(data)
         written = self._wrapped.write(text)
-        if text:
+        if text and text.strip():
             caller = "unknown"
             for frame in reversed(self._extract_stack(limit=16)[:-1]):
                 if frame.filename != self._self_file:
                     caller = f"{frame.filename}:{frame.lineno}:{frame.name}"
                     break
             escaped = text.replace("\n", "\\n")
-            self._log.write(f"{time.time():.6f} {self._name} {caller} {escaped!r}\n")
-            self._log.flush()
+            from beacon.journal import debug
+            debug(f"trace {self._name} {caller} {escaped!r}")
         return written
 
     def flush(self) -> None:
@@ -44,29 +43,23 @@ class _TraceStream:
 def _enable_startup_trace():
     """Enable optional startup output tracing via BEACON_TRACE_STARTUP=1."""
     if os.environ.get("BEACON_TRACE_STARTUP") != "1":
-        return None, None
+        return None
     # Import only when tracing is enabled to keep normal startup lean.
     from traceback import extract_stack
+    from beacon.journal import info
 
-    trace_path = os.environ.get(
-        "BEACON_STARTUP_TRACE_FILE",
-        f"/tmp/beacon-startup-trace-{os.getpid()}.log",
-    )
-    log_file = open(trace_path, "a", encoding="utf-8")
-    log_file.write(f"\n--- startup trace pid={os.getpid()} ts={time.time():.6f} ---\n")
-    log_file.flush()
+    info(f"startup trace enabled pid={os.getpid()}")
     original_stdout = sys.stdout
     original_stderr = sys.stderr
     self_file = __file__
-    sys.stdout = _TraceStream("stdout", original_stdout, log_file, self_file, extract_stack)
-    sys.stderr = _TraceStream("stderr", original_stderr, log_file, self_file, extract_stack)
+    sys.stdout = _TraceStream("stdout", original_stdout, self_file, extract_stack)
+    sys.stderr = _TraceStream("stderr", original_stderr, self_file, extract_stack)
 
     def _restore() -> None:
         sys.stdout = original_stdout
         sys.stderr = original_stderr
-        log_file.close()
 
-    return _restore, trace_path
+    return _restore
 
 
 @contextlib.contextmanager
@@ -112,15 +105,10 @@ def _apply_terminal_compatibility_patches() -> None:
     LinuxDriver._query_in_band_window_resize = _noop
 
 
-def _import_and_run_app(trace_enabled: bool, trace_path: str | None) -> None:
+def _import_and_run_app(trace_enabled: bool) -> None:
     """Import and run Beacon app with startup-safe output handling."""
     if trace_enabled:
         from beacon.app import run
-        if trace_path:
-            try:
-                sys.stderr.write(f"Startup trace enabled: {trace_path}\n")
-            except Exception:
-                pass
         run()
         return
 
@@ -142,10 +130,10 @@ def _maybe_restart_after_update() -> None:
 
 if __name__ == "__main__":
     trace_enabled = os.environ.get("BEACON_TRACE_STARTUP") == "1"
-    _restore_trace, _trace_path = _enable_startup_trace()
+    _restore_trace = _enable_startup_trace()
     try:
         _apply_terminal_compatibility_patches()
-        _import_and_run_app(trace_enabled=trace_enabled, trace_path=_trace_path)
+        _import_and_run_app(trace_enabled=trace_enabled)
         _maybe_restart_after_update()
     except ModuleNotFoundError as e:
         if "textual" in str(e) or "pyproj" in str(e):

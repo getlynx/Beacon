@@ -377,64 +377,61 @@ class RpcClient:
         - tx_count: number of data transactions (index 2+) that have non-op_return outputs
         - shard_count: total number of op_return vouts across all data transactions
         """
-        debug_log = None
+        from beacon.journal import debug as _jlog, error as _jerr
+
         try:
-            debug_log = open("/tmp/beacon-count-debug.log", "a")
-            debug_log.write(f"\n=== Processing block {block_hash[:8]} ===\n")
-            
+            _jlog(f"count: processing block {block_hash[:8]}")
+
             # Get block with verbosity 1 (tx IDs only) - verbosity 2 has a daemon bug
             block = self.getblock(block_hash, 1)
-            debug_log.write(f"getblock(1) returned: {type(block)}, is_dict: {isinstance(block, dict)}\n")
-            
+            _jlog(f"count: getblock(1) returned: {type(block)}, is_dict: {isinstance(block, dict)}")
+
             if not block or not isinstance(block, dict):
-                debug_log.write("Block is None or not dict, returning (0, 0)\n")
-                debug_log.close()
+                _jlog("count: block is None or not dict, returning (0, 0)")
                 return (0, 0)
-            
+
             tx_list = block.get("tx")
-            debug_log.write(f"tx_list type: {type(tx_list)}, is_list: {isinstance(tx_list, list)}\n")
-            
+            _jlog(f"count: tx_list type: {type(tx_list)}, is_list: {isinstance(tx_list, list)}")
+
             if not isinstance(tx_list, list):
-                debug_log.write("tx_list is not a list, returning (0, 0)\n")
-                debug_log.close()
+                _jlog("count: tx_list is not a list, returning (0, 0)")
                 return (0, 0)
-            
-            debug_log.write(f"Block has {len(tx_list)} transaction IDs\n")
-            
+
+            _jlog(f"count: block has {len(tx_list)} transaction IDs")
+
             # Blocks with only generation + coinstake (no data txs) should return (0, 0)
             if len(tx_list) < 3:
-                debug_log.write("Less than 3 transactions, returning (0, 0)\n")
-                debug_log.close()
+                _jlog("count: less than 3 transactions, returning (0, 0)")
                 return (0, 0)
-            
+
             tx_count = 0
             shard_count = 0
-            
+
             # Process transactions from index 2 onwards (data transactions)
             # We need to fetch each transaction individually since verbosity 2 is broken
             for idx, txid in enumerate(tx_list[2:], start=2):
                 if not isinstance(txid, str):
-                    debug_log.write(f"  tx[{idx}] is not string: {type(txid)}\n")
+                    _jlog(f"count: tx[{idx}] is not string: {type(txid)}")
                     continue
-                
-                debug_log.write(f"  Fetching tx[{idx}]: {txid[:16]}...\n")
-                
+
+                _jlog(f"count: fetching tx[{idx}]: {txid[:16]}...")
+
                 # Get transaction details
                 tx = self._safe_call("getrawtransaction", [txid, True])
                 if not tx or not isinstance(tx, dict):
-                    debug_log.write(f"  tx[{idx}] getrawtransaction failed\n")
+                    _jlog(f"count: tx[{idx}] getrawtransaction failed")
                     continue
-                
+
                 vout = tx.get("vout", [])
                 if not isinstance(vout, list):
-                    debug_log.write(f"  tx[{idx}] vout is not list: {type(vout)}\n")
+                    _jlog(f"count: tx[{idx}] vout is not list: {type(vout)}")
                     continue
-                
-                debug_log.write(f"  tx[{idx}] has {len(vout)} outputs\n")
-                
+
+                _jlog(f"count: tx[{idx}] has {len(vout)} outputs")
+
                 has_regular_output = False
                 tx_op_return_count = 0
-                
+
                 # Analyze all outputs in this transaction
                 for out_idx, output in enumerate(vout):
                     if not isinstance(output, dict):
@@ -442,34 +439,30 @@ class RpcClient:
                     script_pubkey = output.get("scriptPubKey")
                     if not isinstance(script_pubkey, dict):
                         continue
-                    
+
                     script_type = script_pubkey.get("type")
-                    
+
                     if script_type == "nulldata":  # op_return is type "nulldata"
                         tx_op_return_count += 1
-                        debug_log.write(f"    tx[{idx}] vout[{out_idx}] is nulldata (shard)\n")
+                        _jlog(f"count: tx[{idx}] vout[{out_idx}] is nulldata (shard)")
                     else:
                         has_regular_output = True
-                
+
                 # Count this as a regular transaction if it has any non-op_return output
                 if has_regular_output:
                     tx_count += 1
-                
+
                 # Add all op_return outputs from this tx to total shard count
                 shard_count += tx_op_return_count
-                
-                debug_log.write(f"  tx[{idx}] result: has_regular={has_regular_output}, op_returns={tx_op_return_count}\n")
-            
-            debug_log.write(f"Final result: tx_count={tx_count}, shard_count={shard_count}\n")
-            debug_log.close()
+
+                _jlog(f"count: tx[{idx}] result: has_regular={has_regular_output}, op_returns={tx_op_return_count}")
+
+            _jlog(f"count: final result: tx_count={tx_count}, shard_count={shard_count}")
             return (tx_count, shard_count)
-            
+
         except Exception as e:
-            if debug_log:
-                debug_log.write(f"EXCEPTION: {e}\n")
-                import traceback
-                debug_log.write(traceback.format_exc())
-                debug_log.close()
+            import traceback
+            _jerr(f"count: exception: {e} {traceback.format_exc()}")
             return (0, 0)
 
     def get_latest_blocks_from_chain(self, count: int = 50, include_tx_counts: bool = False, tz_name: str = "UTC") -> tuple[list[tuple[int, str, str, str, str, int, int]], int | None]:
@@ -594,13 +587,9 @@ class RpcClient:
             
         except Exception as e:
             # Log error but return empty list rather than crashing
-            try:
-                with open("/tmp/beacon-rpc-debug.log", "a") as f:
-                    f.write(f"ERROR in get_latest_blocks_from_chain: {e}\n")
-                    import traceback
-                    f.write(traceback.format_exc())
-            except:
-                pass
+            import traceback
+            from beacon.journal import error as _jerr
+            _jerr(f"rpc: get_latest_blocks_from_chain: {e} {traceback.format_exc()}")
             return ([], None)
 
     def get_backup_dir(self) -> str:
