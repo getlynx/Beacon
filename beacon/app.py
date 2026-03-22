@@ -3232,6 +3232,14 @@ class Beacon(App):
         _jinfo(f"action: {action_name}")
         return super().run_action(action, default_namespace, namespaces=namespaces)
 
+    def notify(self, message: str, *, title: str = "", severity: str = "information", timeout: float | None = None, markup: bool = True) -> None:
+        """Override to log all toast notifications to the beacon journal."""
+        from beacon.journal import info as _jinfo
+        prefix = f"[{severity}]" if severity != "information" else ""
+        label = f" ({title})" if title else ""
+        _jinfo(f"notify:{prefix}{label} {message}")
+        return super().notify(message, title=title, severity=severity, timeout=timeout, markup=markup)
+
     async def on_mount(self) -> None:
         # Initialize startup splash flag
         self._showing_startup_splash = False
