@@ -443,6 +443,36 @@ class HeaderlessCardPanel(CardPanel):
         return "\n".join(self.lines) if self.lines else "... loading"
 
 
+class ScrollableCardPanel(VerticalScroll):
+    """A card panel that supports scrolling, with optional alternating row colors."""
+
+    def __init__(self, title: str, accent_class: str, alternating_rows: bool = False, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.border_title = title
+        self.add_class("card")
+        self.add_class(accent_class)
+        self.alternating_rows = alternating_rows
+        self.lines: list[str] = []
+        self._content = Static("... loading")
+
+    def compose(self) -> ComposeResult:
+        yield self._content
+
+    def update_lines(self, lines: list[str]) -> None:
+        self.lines = lines
+        if not lines:
+            self._content.update("... loading")
+            return
+        if self.alternating_rows:
+            texts = [
+                Text(line, style="dim" if i % 2 == 1 else "")
+                for i, line in enumerate(lines)
+            ]
+            self._content.update(Group(*texts))
+        else:
+            self._content.update("\n".join(lines))
+
+
 class DaemonStatusCard(VerticalScroll):
     """Daemon Status card with text lines and an inline ElectrumX install link."""
 
@@ -2876,7 +2906,7 @@ class Beacon(App):
         self.overview_system = CardPanel(f"{E('💻', '>')} System Utilization", "node", alternating_rows=True, id="overview-system")
         self.overview_daemon_status = DaemonStatusCard(f"{E('🟢', '*')} Daemon Status", "node", id="overview-daemon-status")
         self.overview_pricing = CardPanel(f"{E('💰', '$')} Pricing", "pricing", alternating_rows=True, id="overview-pricing")
-        self.overview_value = CardPanel(f"{E('💵', '$')} Value", "pricing", alternating_rows=True, id="overview-value")
+        self.overview_value = ScrollableCardPanel(f"{E('💵', '$')} Value", "pricing", alternating_rows=True, id="overview-value")
         self.overview_storage = StorageCapabilityPanel(
             f"{E('💾', '>')} Storage Capability", "node", id="overview-storage"
         )
@@ -5362,13 +5392,13 @@ class Beacon(App):
         # Calculate value grid for different denominations
         value_lines = []
         if price_display is not None and price_display > 0:
-            denominations = [(1, "1"), (10, "10"), (100, "100"), (1000, "1K"), (10000, "10K"), (100000, "100K"), (1000000, "1M")]
+            denominations = [(1, "1"), (10, "10"), (100, "100"), (1000, "1K"), (10000, "10K"), (100000, "100K"), (1000000, "1M"), (10000000, "10M"), (100000000, "100M"), (1000000000, "1B")]
             for amount, label in denominations:
                 value = amount * price_display
                 if value >= 1000:
-                    value_lines.append(f"{label:>6} coins  {symbol}{value:>10,.2f}")
+                    value_lines.append(f"{label:>6} coins  {symbol} {value:>10,.2f}")
                 else:
-                    value_lines.append(f"{label:>6} coins  {symbol}{value:>10.2f}")
+                    value_lines.append(f"{label:>6} coins  {symbol} {value:>10.2f}")
         else:
             value_lines = ["Price data unavailable"]
 
