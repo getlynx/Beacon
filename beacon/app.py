@@ -3225,6 +3225,13 @@ class Beacon(App):
         yield self.status_bar
         yield Footer()
 
+    def run_action(self, action: str, default_namespace=None, namespaces=None) -> bool:
+        """Override to log all hotkey/click actions to the beacon journal."""
+        from beacon.journal import info as _jinfo
+        action_name = action if isinstance(action, str) else str(action)
+        _jinfo(f"action: {action_name}")
+        return super().run_action(action, default_namespace, namespaces=namespaces)
+
     async def on_mount(self) -> None:
         # Initialize startup splash flag
         self._showing_startup_splash = False
